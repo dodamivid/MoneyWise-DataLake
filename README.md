@@ -107,19 +107,19 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 
 | #  | Issue | Estado | Parte de la arquitectura |
 |----|-------|--------|--------------------------|
-| 1  | Setup del repo y docker-compose base | ⚪ Pendiente | Infraestructura — MySQL, Zookeeper, Kafka, Kafka Connect (Debezium) |
-| 2  | Fuente MySQL con datos reales | ⚪ Pendiente | Fuente OLTP — MySQL + binlog |
-| 3  | Conector CDC con Debezium | ⚪ Pendiente | CDC — Debezium → Kafka (topics por tabla) |
-| 4  | Script de verificación de eventos | ⚪ Pendiente | CDC — consumer de validación de Kafka |
-| 5  | Spark Job: Bronze (ingesta cruda) | ⚪ Pendiente | Data Lake — capa Bronze |
-| 6  | Spark Job: Silver (limpieza y estandarización) | ⚪ Pendiente | Data Lake — capa Silver |
-| 7  | Spark Job: Gold (capa curada para BI) | ⚪ Pendiente | Data Lake — capa Gold |
-| 8  | Detección de anomalías | ⚪ Pendiente | Data Lake — anomalías sobre Silver/Gold |
-| 9  | Orquestación con Airflow | ⚪ Pendiente | Orquestación — DAG Bronze→Silver→Gold→anomalías |
-| 10 | Salida a Cloud (GCP) | ⚪ Pendiente | Nube — GCP Cloud Storage (capa Gold) |
-| 11 | Documentación y diagrama de arquitectura | ⚪ Pendiente | Transversal — documentación |
-| 12 | Tests de calidad de datos | ⚪ Pendiente | Transversal — QA sobre capa Gold |
-| 13 | Dashboard de BI conectado a Gold | ⚪ Pendiente | Business Intelligence (depende del Issue 7) |
+| [1](https://github.com/dodamivid/MoneyWise-DataLake/issues/1)  | Setup del repo y docker-compose base | ⚪ Pendiente | Infraestructura — MySQL, Zookeeper, Kafka, Kafka Connect (Debezium) |
+| [2](https://github.com/dodamivid/MoneyWise-DataLake/issues/2)  | Fuente MySQL con datos reales | ⚪ Pendiente | Fuente OLTP — MySQL + binlog |
+| [3](https://github.com/dodamivid/MoneyWise-DataLake/issues/3)  | Conector CDC con Debezium | ⚪ Pendiente | CDC — Debezium → Kafka (topics por tabla) |
+| [4](https://github.com/dodamivid/MoneyWise-DataLake/issues/4)  | Script de verificación de eventos | ⚪ Pendiente | CDC — consumer de validación de Kafka |
+| [5](https://github.com/dodamivid/MoneyWise-DataLake/issues/5)  | Spark Job: Bronze (ingesta cruda) | ⚪ Pendiente | Data Lake — capa Bronze |
+| [6](https://github.com/dodamivid/MoneyWise-DataLake/issues/6)  | Spark Job: Silver (limpieza y estandarización) | ⚪ Pendiente | Data Lake — capa Silver |
+| [7](https://github.com/dodamivid/MoneyWise-DataLake/issues/7)  | Spark Job: Gold (capa curada para BI) | ⚪ Pendiente | Data Lake — capa Gold |
+| [8](https://github.com/dodamivid/MoneyWise-DataLake/issues/8)  | Detección de anomalías | ⚪ Pendiente | Data Lake — anomalías sobre Silver/Gold |
+| [9](https://github.com/dodamivid/MoneyWise-DataLake/issues/9)  | Orquestación con Airflow | ⚪ Pendiente | Orquestación — DAG Bronze→Silver→Gold→anomalías |
+| [10](https://github.com/dodamivid/MoneyWise-DataLake/issues/10) | Salida a Cloud (GCP) | ⚪ Pendiente | Nube — GCP Cloud Storage (capa Gold) |
+| [11](https://github.com/dodamivid/MoneyWise-DataLake/issues/11) | Documentación y diagrama de arquitectura | ⚪ Pendiente | Transversal — documentación |
+| [12](https://github.com/dodamivid/MoneyWise-DataLake/issues/12) | Tests de calidad de datos | ⚪ Pendiente | Transversal — QA sobre capa Gold |
+| [13](https://github.com/dodamivid/MoneyWise-DataLake/issues/13) | Dashboard de BI conectado a Gold | ⚪ Pendiente | Business Intelligence (depende del Issue 7) |
 
 ---
 

@@ -1,0 +1,46 @@
+# Secrets / credenciales
+.env
+*.env
+!.env.example
+gcp/*.json
+gcp/credentials/
+!gcp/.gitkeep
+service-account*.json
+
+# Datos del lake (no versionar Parquet local)
+data/bronze/*
+data/silver/*
+data/gold/*
+!data/bronze/.gitkeep
+!data/silver/.gitkeep
+!data/gold/.gitkeep
+spark-warehouse/
+checkpoints/
+_spark_metadata/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Airflow
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+
+# Docker / infra
+.docker/
+
+# IDE / SO
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs varios
+*.log

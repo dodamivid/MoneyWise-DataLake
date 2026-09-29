@@ -108,7 +108,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 | #  | Issue | Estado | Parte de la arquitectura |
 |----|-------|--------|--------------------------|
 | [1](https://github.com/dodamivid/MoneyWise-DataLake/issues/1)  | Setup del repo y docker-compose base |  🟢 Completo | Infraestructura — MySQL, Zookeeper, Kafka, Kafka Connect (Debezium) |
-| [2](https://github.com/dodamivid/MoneyWise-DataLake/issues/2)  | Fuente MySQL con datos reales | ⚪ Pendiente | Fuente OLTP — MySQL + binlog |
+| [2](https://github.com/dodamivid/MoneyWise-DataLake/issues/2)  | Fuente MySQL con datos reales | 🟢 Completo | Fuente OLTP — MySQL + binlog |
 | [3](https://github.com/dodamivid/MoneyWise-DataLake/issues/3)  | Conector CDC con Debezium | ⚪ Pendiente | CDC — Debezium → Kafka (topics por tabla) |
 | [4](https://github.com/dodamivid/MoneyWise-DataLake/issues/4)  | Script de verificación de eventos | ⚪ Pendiente | CDC — consumer de validación de Kafka |
 | [5](https://github.com/dodamivid/MoneyWise-DataLake/issues/5)  | Spark Job: Bronze (ingesta cruda) | ⚪ Pendiente | Data Lake — capa Bronze |

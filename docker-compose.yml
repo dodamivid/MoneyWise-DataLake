@@ -65,7 +65,7 @@ services:
       start_period: 30s
 
   connect:
-    image: debezium/connect:2.4
+    image: quay.io/debezium/connect:3.6
     container_name: mw-connect
     depends_on:
       kafka:
@@ -81,6 +81,12 @@ services:
       CONFIG_STORAGE_REPLICATION_FACTOR: 1
       OFFSET_STORAGE_REPLICATION_FACTOR: 1
       STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      RAILWAY_MYSQL_HOST: ${RAILWAY_MYSQL_HOST}
+      RAILWAY_MYSQL_PORT: ${RAILWAY_MYSQL_PORT}
+      RAILWAY_MYSQL_USER: ${RAILWAY_MYSQL_USER}
+      RAILWAY_MYSQL_PASSWORD: ${RAILWAY_MYSQL_PASSWORD}
     ports:
       - "${CONNECT_REST_PORT}:8083"
     healthcheck:
@@ -89,7 +95,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s
-
 volumes:
   mysql_data:
   kafka_data:

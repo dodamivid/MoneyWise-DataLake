@@ -1,6 +1,6 @@
 -- MySQL dump 10.13  Distrib 8.0.46, for Linux (x86_64)
 --
--- Host: mainline.proxy.rlwy.net    Database: moneywise
+
 -- ------------------------------------------------------
 -- Server version	9.7.2
 

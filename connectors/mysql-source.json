@@ -1,0 +1,26 @@
+{
+  "name": "moneywise-mysql-source",
+  "config": {
+    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "${env:RAILWAY_MYSQL_HOST}",
+    "database.port": "${env:RAILWAY_MYSQL_PORT}",
+    "database.user": "${env:RAILWAY_MYSQL_USER}",
+    "database.password": "${env:RAILWAY_MYSQL_PASSWORD}",
+    "database.ssl.mode": "required",
+    "database.server.id": "184100",
+
+    "topic.prefix": "moneywise",
+    "database.include.list": "moneywise",
+    "table.include.list": "moneywise.usuarios,moneywise.tipos_ingreso,moneywise.tipos_egreso,moneywise.destinos,moneywise.procedencias,moneywise.frecuencias,moneywise.ingresos,moneywise.egresos,moneywise.inversiones,moneywise.metas,moneywise.fechas_corte_ahorro",
+    "column.exclude.list": "moneywise.usuarios.password_hash",
+
+    "decimal.handling.mode": "string",
+    "snapshot.mode": "initial",
+    "include.schema.changes": "true",
+
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:29092",
+    "schema.history.internal.kafka.topic": "schema-history.moneywise"
+  }
+}

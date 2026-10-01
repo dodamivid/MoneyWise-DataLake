@@ -95,6 +95,23 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s
+
+  spark:
+    image: quay.io/jupyter/pyspark-notebook:spark-4.2.0
+    container_name: mw-spark
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-moneywise}
+      JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true
+    ports:
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:4040:4040"
+    volumes:
+      - ./spark:/home/jovyan/work/spark
+      - ./data:/home/jovyan/work/data
 volumes:
   mysql_data:
   kafka_data:

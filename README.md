@@ -141,7 +141,7 @@ curl -X POST -H "Content-Type: application/json" \
 python kafka/scripts/verify_events.py
 
 # 4. Pipeline Spark (Issues 5-7)
-python spark/jobs/bronze/bronze_job.py
+docker exec mw-spark /usr/local/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0 --conf spark.jars.ivy=/tmp/ivy /home/jovyan/work/spark/jobs/bronze/bronze_job.py
 python spark/jobs/silver/silver_job.py
 python spark/jobs/gold/gold_job.py
 

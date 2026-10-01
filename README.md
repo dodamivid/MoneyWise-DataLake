@@ -111,8 +111,8 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 | [2](https://github.com/dodamivid/MoneyWise-DataLake/issues/2)  | Fuente MySQL con datos reales | 🟢 Completo | Fuente OLTP — MySQL + binlog |
 | [3](https://github.com/dodamivid/MoneyWise-DataLake/issues/3)  | Conector CDC con Debezium | 🟢 Completo | CDC — Debezium → Kafka (topics por tabla) |
 | [4](https://github.com/dodamivid/MoneyWise-DataLake/issues/4)  | Script de verificación de eventos | 🟢 Completo | CDC — consumer de validación de Kafka |
-| [5](https://github.com/dodamivid/MoneyWise-DataLake/issues/5)  | Spark Job: Bronze (ingesta cruda) | ⚪ Pendiente | Data Lake — capa Bronze |
-| [6](https://github.com/dodamivid/MoneyWise-DataLake/issues/6)  | Spark Job: Silver (limpieza y estandarización) | ⚪ Pendiente | Data Lake — capa Silver |
+| [5](https://github.com/dodamivid/MoneyWise-DataLake/issues/5)  | Spark Job: Bronze (ingesta cruda) | 🟢 Completo | Data Lake — capa Bronze |
+| [6](https://github.com/dodamivid/MoneyWise-DataLake/issues/6)  | Spark Job: Silver (limpieza y estandarización) | 🟢 Completo  | Data Lake — capa Silver |
 | [7](https://github.com/dodamivid/MoneyWise-DataLake/issues/7)  | Spark Job: Gold (capa curada para BI) | ⚪ Pendiente | Data Lake — capa Gold |
 | [8](https://github.com/dodamivid/MoneyWise-DataLake/issues/8)  | Detección de anomalías | ⚪ Pendiente | Data Lake — anomalías sobre Silver/Gold |
 | [9](https://github.com/dodamivid/MoneyWise-DataLake/issues/9)  | Orquestación con Airflow | ⚪ Pendiente | Orquestación — DAG Bronze→Silver→Gold→anomalías |
@@ -142,7 +142,7 @@ python kafka/scripts/verify_events.py
 
 # 4. Pipeline Spark (Issues 5-7)
 docker exec mw-spark /usr/local/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0 --conf spark.jars.ivy=/tmp/ivy /home/jovyan/work/spark/jobs/bronze/bronze_job.py
-python spark/jobs/silver/silver_job.py
+  docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/spark/jobs/silver/silver_job.py
 python spark/jobs/gold/gold_job.py
 
 # 5. Orquestación completa (Issue 9)

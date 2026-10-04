@@ -149,7 +149,7 @@ docker exec mw-spark /usr/local/spark/bin/spark-submit --packages org.apache.spa
 # 5. Orquestación completa (Issue 9)
 # vía Airflow DAG: moneywise_datalake
 ```
-
+> **Apagar y prender:** usa `docker compose down` (sin `-v`) y `docker compose up -d`. Zookeeper, Kafka y MySQL tienen volúmenes, así que sus datos sobreviven. `down -v` lo borra todo. Si recreas el volumen de Kafka, vacía `data/bronze` y `data/checkpoints` y reconstruye Bronze, Silver y Gold: los offsets de Bronze pertenecen al topic anterior.
 ---
 
 ## Requisitos

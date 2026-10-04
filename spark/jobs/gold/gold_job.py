@@ -1,13 +1,16 @@
 """Spark Job Gold (Issue 7): resúmenes de negocio para BI, a partir de Silver.
 
 Tablas que produce (en data/gold/):
-  balance_mensual              una fila por usuario y mes: ingresos, egresos, balance y balance acumulado
-  gasto_por_categoria_mensual  una fila por usuario, mes y categoría: total y variación vs el mes anterior
+  balance_mensual            por usuario y mes: ingresos, egresos, balance y balance acumulado
+  gasto_por_destino_mensual  por usuario, mes y destino (la categoría del gasto: Renta, Alimentación...)
+  gasto_por_tipo_mensual     por usuario, mes y tipo de egreso (el método de pago: Efectivo, Tarjeta...)
+Las dos de gasto traen el total y la variación contra el mes calendario anterior.
 
 Reglas (las mismas que usa la app en sp_dashboard_*):
   - Solo movimientos activos (eliminado_en vacío).
   - Cada movimiento cuenta una vez, sin repartir los recurrentes.
   - El mes sale de fecha_inicio.
+  - Un egreso sin destino se muestra como "Sin destino" (id 0), igual que la app.
 Sin datos personales: solo usuario_id. Se reconstruye completo en cada corrida (overwrite).
 """
 import os
@@ -59,44 +62,47 @@ def balance_mensual(ingresos, egresos):
     ).orderBy("usuario_id", "mes")
 
 
-def gasto_por_categoria(egresos, tipos_egreso):
-    categorias = tipos_egreso.select(
-        F.col("id").alias("tipo_id"), F.col("nombre").alias("categoria_nombre")
-    )
+def gasto_mensual(egresos, catalogo, col_id, col_nombre, sin_nombre):
+    """Gasto por usuario, mes y una dimensión (destino o tipo), con variación vs el mes anterior.
+
+    col_id:     columna de egresos que apunta al catálogo (destino_id o tipo_id)
+    col_nombre: cómo se llamará la columna con el nombre (destino o tipo)
+    sin_nombre: texto cuando no hay valor o no existe en el catálogo
+    """
+    nombres = catalogo.select(F.col("id").alias(col_id), F.col("nombre").alias("_nombre"))
     mensual = (
-        egresos.join(categorias, "tipo_id", "left")
-        .withColumn("categoria", F.coalesce("categoria_nombre", F.lit("Sin tipo")))  # igual que la app
-        .groupBy("usuario_id", "mes", "tipo_id", "categoria")
+        # Sin valor -> 0 (como la app). Así la unión con el mes anterior también funciona para
+        # ese grupo: en un join, NULL nunca es igual a NULL.
+        egresos.withColumn(col_id, F.coalesce(F.col(col_id), F.lit(0)))
+        .join(nombres, col_id, "left")
+        .withColumn(col_nombre, F.coalesce("_nombre", F.lit(sin_nombre)))
+        .groupBy("usuario_id", "mes", col_id, col_nombre)
         .agg(F.sum("monto").cast(MONEDA).alias("total_egresos"), F.count("*").alias("n_egresos"))
     )
 
     # Mes anterior (calendario): cada fila se desplaza un mes hacia adelante y se une con la original.
     anterior = mensual.select(
-        "usuario_id", "tipo_id",
+        "usuario_id", col_id,
         F.add_months("mes", 1).alias("mes"),
         F.col("total_egresos").alias("total_mes_anterior"),
     )
     return (
-        mensual.join(anterior, ["usuario_id", "tipo_id", "mes"], "left")
+        mensual.join(anterior, ["usuario_id", col_id, "mes"], "left")
         .withColumn(
             "variacion_pct",
             F.round(F.try_divide((F.col("total_egresos") - F.col("total_mes_anterior")) * 100,
                                  F.col("total_mes_anterior")), 2),
         )
-        .select("usuario_id", "mes", "tipo_id", "categoria", "total_egresos", "n_egresos",
+        .select("usuario_id", "mes", col_id, col_nombre, "total_egresos", "n_egresos",
                 "total_mes_anterior", "variacion_pct")
-        .orderBy("usuario_id", "mes", "categoria")
+        .orderBy("usuario_id", "mes", col_nombre)
     )
 
 
 def escribir(df, tabla):
     destino = f"{GOLD_PATH}/{tabla}"
     df.coalesce(1).write.mode("overwrite").parquet(destino)  # tablas chicas: un solo archivo
-    return spark_filas(destino)
-
-
-def spark_filas(ruta):
-    return SparkSession.getActiveSession().read.parquet(ruta).count()
+    return SparkSession.getActiveSession().read.parquet(destino).count()
 
 
 def main():
@@ -109,12 +115,16 @@ def main():
 
     ingresos = movimientos_activos(leer(spark, "ingresos"))
     egresos = movimientos_activos(leer(spark, "egresos"))
-    tipos_egreso = leer(spark, "tipos_egreso")
+
+    tablas = {
+        "balance_mensual": balance_mensual(ingresos, egresos),
+        "gasto_por_destino_mensual": gasto_mensual(egresos, leer(spark, "destinos"), "destino_id", "destino", "Sin destino"),
+        "gasto_por_tipo_mensual": gasto_mensual(egresos, leer(spark, "tipos_egreso"), "tipo_id", "tipo", "Sin tipo"),
+    }
 
     print("\n--- Gold ---")
-    print(f"{'balance_mensual':<30} {escribir(balance_mensual(ingresos, egresos), 'balance_mensual'):>6} filas")
-    print(f"{'gasto_por_categoria_mensual':<30} "
-          f"{escribir(gasto_por_categoria(egresos, tipos_egreso), 'gasto_por_categoria_mensual'):>6} filas")
+    for nombre, df in tablas.items():
+        print(f"{nombre:<28} {escribir(df, nombre):>6} filas")
     print("Gold: corrida terminada.")
 
 

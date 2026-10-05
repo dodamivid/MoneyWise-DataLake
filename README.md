@@ -116,7 +116,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 | [7](https://github.com/dodamivid/MoneyWise-DataLake/issues/7)  | Spark Job: Gold (capa curada para BI) | 🟢 Completo | Data Lake — capa Gold |
   > **Reglas de Gold:** solo movimientos activos (`eliminado_en` vacío); cada movimiento cuenta una vez, sin repartir los recurrentes por frecuencia; el mes sale de `fecha_inicio`; sin datos personales (solo `usuario_id`). Son las mismas reglas que usan los `sp_dashboard_*` de la app.
   > **Tablas de Gold:** `balance_mensual`; `gasto_por_destino_mensual` (la categoría del gasto: Renta, Alimentación, Transporte...) y `gasto_por_tipo_mensual` (el método de pago: Efectivo, Tarjeta, Transferencia...). Un egreso sin destino aparece como "Sin destino".
-| [8](https://github.com/dodamivid/MoneyWise-DataLake/issues/8)  | Detección de anomalías | ⚪ Pendiente | Data Lake — anomalías sobre Silver/Gold |
+| [8](https://github.com/dodamivid/MoneyWise-DataLake/issues/8)  | Detección de anomalías | 🟢 Completo | Data Lake — anomalías sobre Silver/Gold |
 | [9](https://github.com/dodamivid/MoneyWise-DataLake/issues/9)  | Orquestación con Airflow | ⚪ Pendiente | Orquestación — DAG Bronze→Silver→Gold→anomalías |
 | [10](https://github.com/dodamivid/MoneyWise-DataLake/issues/10) | Salida a Cloud (GCP) | ⚪ Pendiente | Nube — GCP Cloud Storage (capa Gold) |
 | [11](https://github.com/dodamivid/MoneyWise-DataLake/issues/11) | Documentación y diagrama de arquitectura | ⚪ Pendiente | Transversal — documentación |
@@ -152,6 +152,9 @@ docker exec mw-spark /usr/local/spark/bin/spark-submit --packages org.apache.spa
 ```
 > **Apagar y prender:** usa `docker compose down` (sin `-v`) y `docker compose up -d`. Zookeeper, Kafka y MySQL tienen volúmenes, así que sus datos sobreviven. `down -v` lo borra todo. Si recreas el volumen de Kafka, vacía `data/bronze` y `data/checkpoints` y reconstruye Bronze, Silver y Gold: los offsets de Bronze pertenecen al topic anterior.
 ---
+docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/anomalies/anomalias_job.py
+  > **Anomalías:** método IQR sobre egresos activos, por usuario y destino. "Atípico" supera Q3 + 1.5 × IQR y "extremo" supera Q3 + 3 × IQR; solo se marcan montos altos. Los grupos con menos de 8 movimientos o IQR = 0 no se evalúan. La tabla `data/gold/anomalias` no lleva la descripción del gasto. Los umbrales se ajustan con `ANOM_MIN_MOVIMIENTOS`, `ANOM_K_ATIPICO` y `ANOM_K_EXTREMO`.
+
 
 ## Requisitos
 

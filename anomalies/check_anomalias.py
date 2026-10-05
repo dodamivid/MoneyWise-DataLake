@@ -1,5 +1,6 @@
 """Verificación de anomalías: reglas internas y recálculo independiente en Python puro."""
 import os
+import sys
 from collections import defaultdict
 
 from pyspark.sql import SparkSession
@@ -22,8 +23,13 @@ anomalias = spark.read.parquet(f"{GOLD_PATH}/anomalias")
 egresos = spark.read.parquet(f"{SILVER_PATH}/egresos")
 
 
+FALLAS = []
+
+
 def revisar(condicion, mensaje):
     print(("OK    " if condicion else "FALLA ") + mensaje)
+    if not condicion:
+        FALLAS.append(mensaje)
 
 
 print("--- Resumen ---")
@@ -82,3 +88,10 @@ if esperadas != obtenidas:
 print("\n--- Las más grandes (para revisar a mano en Railway) ---")
 (anomalias.select("egreso_id", "usuario_id", "destino", "fecha", "monto", "limite_atipico", "severidad")
     .orderBy(F.col("exceso_sobre_limite").desc()).show(10, truncate=False))
+
+if FALLAS:
+    print(f"\n{len(FALLAS)} verificación(es) fallaron:")
+    for falla in FALLAS:
+        print(" -", falla)
+    sys.exit(1)
+print("\nTodas las verificaciones pasaron.")

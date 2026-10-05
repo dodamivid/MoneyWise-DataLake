@@ -1,5 +1,6 @@
 """Verificación de Gold: coherencia con Silver, matices y muestra para cuadrar con la app."""
 import os
+import sys
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -27,8 +28,13 @@ def suma(df, columna):
     return df.agg(F.sum(columna)).collect()[0][0] or 0
 
 
+FALLAS = []
+
+
 def revisar(condicion, mensaje):
     print(("OK    " if condicion else "FALLA ") + mensaje)
+    if not condicion:
+        FALLAS.append(mensaje)
 
 
 def sin_repetidos(df, llaves):
@@ -87,3 +93,10 @@ mes_ref = os.getenv("CHECK_MES", "2026-08-01")
 print(f"--- Referencia: gasto por destino, usuario {usuario_ref}, mes {mes_ref} (compara con tu app) ---")
 (por_destino.filter((F.col("usuario_id") == usuario_ref) & (F.col("mes") == F.lit(mes_ref).cast("date")))
     .select("destino", "total_egresos").orderBy(F.col("total_egresos").desc()).show(truncate=False))
+
+if FALLAS:
+    print(f"\n{len(FALLAS)} verificación(es) fallaron:")
+    for falla in FALLAS:
+        print(" -", falla)
+    sys.exit(1)
+print("\nTodas las verificaciones pasaron.")

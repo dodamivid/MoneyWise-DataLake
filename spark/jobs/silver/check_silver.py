@@ -1,5 +1,6 @@
-"""Verificación de Silver: conteos, tipos y el caso del egreso de prueba (id 1749)."""
+"""Verificación de Silver: compuertas de calidad (el DAG se detiene si alguna falla) y un vistazo a los datos."""
 import os
+import sys
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -15,20 +16,43 @@ spark = (
 )
 spark.sparkContext.setLogLevel("ERROR")
 
+FALLAS = []
+
+
+def revisar(condicion, mensaje):
+    print(("OK    " if condicion else "FALLA ") + mensaje)
+    if not condicion:
+        FALLAS.append(mensaje)
+
+
+datos = {t: spark.read.parquet(f"{SILVER_PATH}/{t}") for t in TABLAS}
+
 print("--- Filas por tabla ---")
 total = 0
-for t in TABLAS:
-    n = spark.read.parquet(f"{SILVER_PATH}/{t}").count()
-    total += n
-    print(f"{t:<22} {n:>6}")
+conteos = {}
+for t, df in datos.items():
+    conteos[t] = df.count()
+    total += conteos[t]
+    print(f"{t:<22} {conteos[t]:>6}")
 print(f"{'TOTAL':<22} {total:>6}")
 
-egresos = spark.read.parquet(f"{SILVER_PATH}/egresos")
+print("\n--- Compuertas de calidad ---")
+for t, df in datos.items():
+    n = conteos[t]
+    con_delete = df.filter(F.col("_ultima_op") == "d").count()
+    unicos = df.select("id").distinct().count()
+    motivos = []
+    if n == 0:
+        motivos.append("está vacía")
+    if n != unicos:
+        motivos.append(f"{n - unicos} fila(s) con id repetido")
+    if con_delete:
+        motivos.append(f"{con_delete} fila(s) con DELETE como último evento")
+    revisar(not motivos, f"{t}: {n} filas" + (f" -> {', '.join(motivos)}" if motivos else ", ids únicos, sin DELETE como último evento"))
+for t in ("ingresos", "egresos"):
+    revisar(datos[t].filter(F.col("monto").isNull()).count() == 0, f"{t}: ningún monto nulo")
 
-print("\n--- Egreso de prueba (id 1749) ---")
-n1749 = egresos.filter("id = 1749").count()
-print("existe en Silver:", n1749 > 0, "(debe ser False: se borró en la prueba)")
-
+egresos = datos["egresos"]
 print("\n--- Tipos de egresos ---")
 egresos.printSchema()
 
@@ -42,4 +66,11 @@ print("--- Muestra ---")
 egresos.select("id", "monto", "descripcion", "fecha_inicio", "creado_en", "eliminado_en").orderBy("id").show(3, truncate=False)
 
 print("--- usuarios: booleanos, fecha y json ---")
-spark.read.parquet(f"{SILVER_PATH}/usuarios").select("id", "activo", "fecha_nacimiento", "scopes").show(3, truncate=40)
+datos["usuarios"].select("id", "activo", "fecha_nacimiento", "scopes").show(3, truncate=40)
+
+if FALLAS:
+    print(f"\n{len(FALLAS)} verificación(es) fallaron:")
+    for falla in FALLAS:
+        print(" -", falla)
+    sys.exit(1)
+print("\nTodas las verificaciones pasaron.")

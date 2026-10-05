@@ -1,3 +1,23 @@
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+  image: moneywise-airflow:3.3.2
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Chihuahua
+    AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY:?falta AIRFLOW_FERNET_KEY en .env}"
+    AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET:?falta AIRFLOW_JWT_SECRET en .env}"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?falta AIRFLOW_DB_PASSWORD en .env}@airflow-postgres/airflow"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+    AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
+    MW_REINTENTO_MINUTOS: ${MW_REINTENTO_MINUTOS:-2}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./data:/opt/airflow/data:ro
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -116,8 +136,86 @@ services:
       - ./spark:/home/jovyan/work/spark
       - ./data:/home/jovyan/work/data
       - ./anomalies:/home/jovyan/work/anomalies
+
+
+  airflow-postgres:
+    image: postgres:16
+    container_name: mw-airflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: "${AIRFLOW_DB_PASSWORD:?falta AIRFLOW_DB_PASSWORD en .env}"
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow", "-d", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: mw-airflow-init
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["exec /entrypoint airflow db migrate"]
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+
+  airflow-api-server:
+    <<: *airflow-common
+    container_name: mw-airflow-api
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        python -c "import json, os; json.dump({'admin': os.environ['AIRFLOW_ADMIN_PASSWORD']}, open('/opt/airflow/passwords.json', 'w'))"
+        exec /entrypoint airflow api-server
+    environment:
+      <<: *airflow-env
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/passwords.json
+      AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:?falta AIRFLOW_ADMIN_PASSWORD en .env}"
+    ports:
+      - "127.0.0.1:8085:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: mw-airflow-dag-processor
+    restart: unless-stopped
+    command: dag-processor
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+
+  # Solo el scheduler recibe el socket de Docker: con LocalExecutor las tareas corren aquí
+  # y necesitan `docker exec mw-spark ...`. La API y el procesador de DAGs no lo reciben.
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: mw-airflow-scheduler
+    restart: unless-stopped
+    command: scheduler
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
 volumes:
   mysql_data:
   kafka_data:
   zookeeper_data:
   zookeeper_log:
+  airflow_pg_data:

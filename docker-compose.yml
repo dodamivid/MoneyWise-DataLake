@@ -115,6 +115,7 @@ services:
     volumes:
       - ./spark:/home/jovyan/work/spark
       - ./data:/home/jovyan/work/data
+      - ./anomalies:/home/jovyan/work/anomalies
 volumes:
   mysql_data:
   kafka_data:

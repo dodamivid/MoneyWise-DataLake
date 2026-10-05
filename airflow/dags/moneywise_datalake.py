@@ -1,13 +1,15 @@
 """DAG moneywise_datalake (Issue 9): orquesta el pipeline completo del data lake.
 
   revisar_infra -> hay_datos_nuevos -> bronze -> silver -> check_silver
-                -> gold -> check_gold -> anomalias -> check_anomalias
+                -> gold -> check_gold -> anomalias -> check_anomalias -> subir_gold
 
 - revisar_infra:    el conector de Debezium está RUNNING y Spark (contenedor) responde.
 - hay_datos_nuevos: compara hasta dónde llegó Kafka con hasta dónde leyó Bronze. Si no hay
                     nada nuevo, se salta el resto. Con el parámetro `forzar` corre igual.
 - Los jobs son los mismos spark-submit que se corrían a mano, vía `docker exec mw-spark`.
 - Los check_* son compuertas de calidad: si algún chequeo falla, el DAG se detiene.
+- subir_gold:       publica la capa Gold en Cloud Storage (gcp/subir_gold.py). Solo corre si todas las
+                    compuertas pasaron. Si GCS_BUCKET no está configurado, la tarea queda "skipped".
 - Reintentos: 2, con 2 minutos de espera. Cada reintento y cada falla se anota en el
   archivo de alertas (logs/alertas.log) y queda visible en la interfaz de Airflow.
 """
@@ -35,6 +37,7 @@ PREFIJO_TOPICS = "moneywise.moneywise."
 CHECKPOINT_BRONZE = Path(os.getenv("BRONZE_CHECKPOINT_DIR", "/opt/airflow/data/checkpoints/bronze"))
 ARCHIVO_ALERTAS = Path(os.getenv("AIRFLOW_ALERTS_FILE", "/opt/airflow/logs/alertas.log"))
 ESPERA_REINTENTO = timedelta(minutes=float(os.getenv("MW_REINTENTO_MINUTOS", "2")))
+GCP_SCRIPT = os.getenv("GCP_SCRIPT", "/opt/airflow/gcp/subir_gold.py")
 
 
 # ---------------------------------------------------------------- alertas
@@ -171,10 +174,14 @@ with DAG(
     anomalias = BashOperator(task_id="anomalias", bash_command=f"{SUBMIT} {TRABAJO}/anomalies/anomalias_job.py")
     check_anomalias = BashOperator(task_id="check_anomalias", bash_command=f"{SUBMIT} {TRABAJO}/anomalies/check_anomalias.py")
 
+    # Código de salida 99 = GCS_BUCKET no configurado: Airflow marca la tarea como "skipped", no como falla.
+    subir_gold = BashOperator(task_id="subir_gold", bash_command=f"python {GCP_SCRIPT}", skip_on_exit_code=99)
+
     (
         revisar_infra()
         >> hay_datos_nuevos()
         >> bronze >> silver >> check_silver
         >> gold >> check_gold
         >> anomalias >> check_anomalias
+        >> subir_gold
     )

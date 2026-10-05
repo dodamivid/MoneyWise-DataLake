@@ -26,7 +26,7 @@ services:
       ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_CLIENT_PORT}
       ZOOKEEPER_TICK_TIME: 2000
     ports:
-      - "${ZOOKEEPER_CLIENT_PORT}:2181"
+      - "127.0.0.1:${ZOOKEEPER_CLIENT_PORT}:2181"
     volumes:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_log:/var/lib/zookeeper/log
@@ -52,7 +52,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     ports:
-      - "9092:9092"
+      - "127.0.0.1:9092:9092"
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -76,7 +76,7 @@ services:
       - --binlog-format=${MYSQL_BINLOG_FORMAT}
       - --binlog-row-image=FULL
     ports:
-      - "3307:3306"
+      - "127.0.0.1:3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
@@ -111,7 +111,7 @@ services:
       RAILWAY_MYSQL_USER: ${RAILWAY_MYSQL_USER}
       RAILWAY_MYSQL_PASSWORD: ${RAILWAY_MYSQL_PASSWORD}
     ports:
-      - "${CONNECT_REST_PORT}:8083"
+      - "127.0.0.1:${CONNECT_REST_PORT}:8083"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
       interval: 15s

@@ -114,14 +114,16 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 | [5](https://github.com/dodamivid/MoneyWise-DataLake/issues/5)  | Spark Job: Bronze (ingesta cruda) | 🟢 Completo | Data Lake — capa Bronze |
 | [6](https://github.com/dodamivid/MoneyWise-DataLake/issues/6)  | Spark Job: Silver (limpieza y estandarización) | 🟢 Completo  | Data Lake — capa Silver |
 | [7](https://github.com/dodamivid/MoneyWise-DataLake/issues/7)  | Spark Job: Gold (capa curada para BI) | 🟢 Completo | Data Lake — capa Gold |
-  > **Reglas de Gold:** solo movimientos activos (`eliminado_en` vacío); cada movimiento cuenta una vez, sin repartir los recurrentes por frecuencia; el mes sale de `fecha_inicio`; sin datos personales (solo `usuario_id`). Son las mismas reglas que usan los `sp_dashboard_*` de la app.
-  > **Tablas de Gold:** `balance_mensual`; `gasto_por_destino_mensual` (la categoría del gasto: Renta, Alimentación, Transporte...) y `gasto_por_tipo_mensual` (el método de pago: Efectivo, Tarjeta, Transferencia...). Un egreso sin destino aparece como "Sin destino".
 | [8](https://github.com/dodamivid/MoneyWise-DataLake/issues/8)  | Detección de anomalías | 🟢 Completo | Data Lake — anomalías sobre Silver/Gold |
-| [9](https://github.com/dodamivid/MoneyWise-DataLake/issues/9)  | Orquestación con Airflow | ⚪ Pendiente | Orquestación — DAG Bronze→Silver→Gold→anomalías |
-| [10](https://github.com/dodamivid/MoneyWise-DataLake/issues/10) | Salida a Cloud (GCP) | ⚪ Pendiente | Nube — GCP Cloud Storage (capa Gold) |
+| [9](https://github.com/dodamivid/MoneyWise-DataLake/issues/9)  | Orquestación con Airflow | 🟢 Completo | Orquestación — DAG Bronze→Silver→Gold→anomalías |
+| [10](https://github.com/dodamivid/MoneyWise-DataLake/issues/10) | Salida a Cloud (GCP) | 🟢 Completo | Nube — GCP Cloud Storage (capa Gold) |
 | [11](https://github.com/dodamivid/MoneyWise-DataLake/issues/11) | Documentación y diagrama de arquitectura | ⚪ Pendiente | Transversal — documentación |
 | [12](https://github.com/dodamivid/MoneyWise-DataLake/issues/12) | Tests de calidad de datos | ⚪ Pendiente | Transversal — QA sobre capa Gold |
 | [13](https://github.com/dodamivid/MoneyWise-DataLake/issues/13) | Dashboard de BI conectado a Gold | ⚪ Pendiente | Business Intelligence (depende del Issue 7) |
+
+> **Reglas de Gold:** solo movimientos activos (`eliminado_en` vacío); cada movimiento cuenta una vez, sin repartir los recurrentes por frecuencia; el mes sale de `fecha_inicio`; sin datos personales (solo `usuario_id`). Son las mismas reglas que usan los `sp_dashboard_*` de la app.
+
+> **Tablas de Gold:** `balance_mensual`; `gasto_por_destino_mensual` (la categoría del gasto: Renta, Alimentación, Transporte...) y `gasto_por_tipo_mensual` (el método de pago: Efectivo, Tarjeta, Transferencia...). Un egreso sin destino aparece como "Sin destino".
 
 ---
 
@@ -131,8 +133,8 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 
 ```bash
 # 1. Infraestructura (Issue 1)
-cp .env.example .env
-docker-compose up -d
+cp .env.example .env          # luego llena las contraseñas y los secretos de Airflow
+docker compose up -d
 
 # 2. Cargar el conector Debezium (Issue 3)
 curl -X POST -H "Content-Type: application/json" \
@@ -142,24 +144,32 @@ curl -X POST -H "Content-Type: application/json" \
 # 3. Verificar eventos CDC (Issue 4)
 python kafka/scripts/verify_events.py
 
-# 4. Pipeline Spark (Issues 5-7)
+# 4. Pipeline a mano: Spark y anomalías (Issues 5-8)
 docker exec mw-spark /usr/local/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0 --conf spark.jars.ivy=/tmp/ivy /home/jovyan/work/spark/jobs/bronze/bronze_job.py
-  docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/spark/jobs/silver/silver_job.py
-  docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/spark/jobs/gold/gold_job.py
-
-# 5. Orquestación completa (Issue 9)
-# vía Airflow DAG: moneywise_datalake
-   #    Interfaz: http://localhost:8085   usuario: admin   contraseña: AIRFLOW_ADMIN_PASSWORD de tu .env
-```
-> **Apagar y prender:** usa `docker compose down` (sin `-v`) y `docker compose up -d`. Zookeeper, Kafka y MySQL tienen volúmenes, así que sus datos sobreviven. `down -v` lo borra todo. Si recreas el volumen de Kafka, vacía `data/bronze` y `data/checkpoints` y reconstruye Bronze, Silver y Gold: los offsets de Bronze pertenecen al topic anterior.
----
+docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/spark/jobs/silver/silver_job.py
+docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/spark/jobs/gold/gold_job.py
 docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/anomalies/anomalias_job.py
-  > **Anomalías:** método IQR sobre egresos activos, por usuario y destino. "Atípico" supera Q3 + 1.5 × IQR y "extremo" supera Q3 + 3 × IQR; solo se marcan montos altos. Los grupos con menos de 8 movimientos o IQR = 0 no se evalúan. La tabla `data/gold/anomalias` no lleva la descripción del gasto. Los umbrales se ajustan con `ANOM_MIN_MOVIMIENTOS`, `ANOM_K_ATIPICO` y `ANOM_K_EXTREMO`.
 
+# 5. Orquestación completa (Issue 9): Airflow corre lo anterior solo
+#    Interfaz: http://localhost:8085   usuario: admin   contraseña: AIRFLOW_ADMIN_PASSWORD de tu .env
+#    DAG: moneywise_datalake (nace en pausa: actívalo con su interruptor)
+
+# 6. Publicar Gold en Cloud Storage (Issue 10): lo hace el DAG al final; a mano:
+docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py --dry-run   # solo muestra qué subiría
+docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py             # sube y verifica
+```
+
+> **Apagar y prender:** usa `docker compose down` (sin `-v`) y `docker compose up -d`. Zookeeper, Kafka y MySQL tienen volúmenes, así que sus datos sobreviven. `down -v` lo borra todo. Si recreas el volumen de Kafka, vacía `data/bronze` y `data/checkpoints` y reconstruye Bronze, Silver y Gold: los offsets de Bronze pertenecen al topic anterior.
+
+> **Anomalías:** método IQR sobre egresos activos, por usuario y destino. "Atípico" supera Q3 + 1.5 × IQR y "extremo" supera Q3 + 3 × IQR; solo se marcan montos altos. Los grupos con menos de 8 movimientos o IQR = 0 no se evalúan. La tabla `data/gold/anomalias` no lleva la descripción del gasto. Los umbrales se ajustan con `ANOM_MIN_MOVIMIENTOS`, `ANOM_K_ATIPICO` y `ANOM_K_EXTREMO`.
+
+> **Airflow:** el DAG `moneywise_datalake` corre todos los días a las 3:00 (hora de Chihuahua) y encadena `revisar_infra → hay_datos_nuevos → bronze → silver → check_silver → gold → check_gold → anomalías → check_anomalías → subir_gold`. Si Kafka no tiene datos nuevos desde la última corrida de Bronze, se salta el resto (con el parámetro `forzar` corre igual). Los `check_*` son compuertas de calidad: si un chequeo falla, el DAG se detiene y no se publica nada. Cada tarea se reintenta 2 veces; los reintentos y las fallas se anotan en `airflow/logs/alertas.log`. Las tareas ejecutan `docker exec mw-spark ...`, por eso solo el scheduler tiene montado el socket de Docker.
+
+> **Cloud Storage:** al final del DAG, `subir_gold` publica las 4 tablas de Gold en `gs://<tu-bucket>/gold/<tabla>/data.parquet` con nombre fijo (cada corrida sobrescribe la anterior), verifica tamaño y MD5 y publica `gold/_manifest.json`. Se autentica con una service account: la llave JSON vive en `gcp/credentials/` (ignorada por git) y solo el scheduler la tiene montada. Si `GCS_BUCKET` está vacío la tarea se omite y el resto del pipeline sigue igual. Para entrar al free tier el bucket debe estar en `us-central1`, `us-east1` o `us-west1`.
 
 ## Requisitos
 
 - Docker + Docker Compose
 - Python 3.10+
 - Java 11+ (para Spark)
-- Cuenta GCP con free tier (para Issue 10)
+- Cuenta GCP con facturación activada y free tier (para Issue 10)

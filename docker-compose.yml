@@ -205,10 +205,16 @@ services:
     container_name: mw-airflow-scheduler
     restart: unless-stopped
     command: scheduler
+    environment:
+      <<: *airflow-env
+      GCS_BUCKET: "${GCS_BUCKET:-}"
+      GCP_PROJECT_ID: "${GCP_PROJECT_ID:-}"
+      GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/gcp/credentials/service-account.json
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - ./data:/opt/airflow/data:ro
+      - ./gcp:/opt/airflow/gcp:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       airflow-api-server:

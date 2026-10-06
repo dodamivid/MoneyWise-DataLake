@@ -1,0 +1,4 @@
+# Dependencias para correr los tests de calidad (pytest). Las del pipeline están en requirements.txt.
+pyarrow==25.0.1
+pytest==9.1.1
+PyMySQL==1.2.3

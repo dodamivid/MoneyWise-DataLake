@@ -1,5 +1,7 @@
 # MoneyWise-DataLake
 
+[![tests](https://github.com/dodamivid/MoneyWise-DataLake/actions/workflows/tests.yml/badge.svg)](https://github.com/dodamivid/MoneyWise-DataLake/actions/workflows/tests.yml)
+
 Data lake financiero con **CDC (Change Data Capture) en tiempo real**. Captura cada
 `INSERT` / `UPDATE` / `DELETE` de una base OLTP (MySQL) mediante Debezium, los transporta
 por Kafka y los procesa con Spark Structured Streaming en un modelo por capas
@@ -83,6 +85,8 @@ flowchart LR
 monelake/
 ├── docker-compose.yml        # Zookeeper, Kafka, Connect (Debezium), MySQL local, Spark y Airflow (con Postgres)
 ├── .env.example              # Plantilla de variables de entorno (cópiala a .env)
+├── requirements-dev.txt      # dependencias de los tests (pytest, pyarrow, PyMySQL)
+├── .github/workflows/        # CI: corre los tests en cada PR                           [Issue 12]
 ├── connectors/               # mysql-source.json — conector Debezium                    [Issue 3]
 ├── mysql/init/               # MySQL local de pruebas: schema y usuario debezium        [Issue 2]
 ├── kafka/scripts/            # consumer de verificación de eventos                      [Issue 4]
@@ -95,7 +99,7 @@ monelake/
 ├── airflow/                  # Dockerfile y DAG moneywise_datalake                      [Issue 9]
 ├── gcp/                      # subir_gold.py: Gold → Cloud Storage                      [Issue 10]
 ├── data/{bronze,silver,gold}/  # salida Parquet local (no versionada)
-├── tests/                    # data quality checks (pytest)                             [Issue 12]
+├── tests/                    # pytest: calidad de Gold, defectos inyectados y cuadre con Railway [Issue 12]
 ├── dashboard/                # conexión y capturas del dashboard de BI                  [Issue 13]
 ├── docs/                     # arquitectura, decisiones y problemas resueltos           [Issue 11]
 └── scripts/                  # create_issues.sh (crea las 13 issues) y generar_secretos.py (secretos de Airflow)
@@ -120,7 +124,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 | [9](https://github.com/dodamivid/MoneyWise-DataLake/issues/9)  | Orquestación con Airflow | 🟢 Completo | Orquestación — DAG Bronze→Silver→Gold→anomalías |
 | [10](https://github.com/dodamivid/MoneyWise-DataLake/issues/10) | Salida a Cloud (GCP) | 🟢 Completo | Nube — GCP Cloud Storage (capa Gold) |
 | [11](https://github.com/dodamivid/MoneyWise-DataLake/issues/11) | Documentación y diagrama de arquitectura | 🟢 Completo | Transversal — documentación |
-| [12](https://github.com/dodamivid/MoneyWise-DataLake/issues/12) | Tests de calidad de datos | ⚪ Pendiente | Transversal — QA sobre capa Gold |
+| [12](https://github.com/dodamivid/MoneyWise-DataLake/issues/12) | Tests de calidad de datos | 🟢 Completo | Transversal — QA sobre capa Gold |
 | [13](https://github.com/dodamivid/MoneyWise-DataLake/issues/13) | Dashboard de BI conectado a Gold | ⚪ Pendiente | Business Intelligence (depende del Issue 7) |
 
 > **Reglas de Gold:** solo movimientos activos (`eliminado_en` vacío); cada movimiento cuenta una vez, sin repartir los recurrentes por frecuencia; el mes sale de `fecha_inicio`; sin datos personales (solo `usuario_id`). Son las mismas reglas que usan los `sp_dashboard_*` de la app.
@@ -134,7 +138,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 ### Requisitos
 
 - **Docker Desktop** con unos **8 GB de RAM** asignados (Airflow pide al menos 4 GB y aquí corren además Kafka y Spark).
-- **Python 3.10+** en tu equipo, solo para el verificador de eventos (`kafka/scripts/verify_events.py`). Spark corre dentro de Docker: no necesitas Java.
+- **Python 3.10+** en tu equipo, para el verificador de eventos (`kafka/scripts/verify_events.py`) y los tests de calidad. Spark corre dentro de Docker: no necesitas Java.
 - Una base **MySQL en Railway** con el binlog activado y un usuario para Debezium (ver abajo).
 - *(Opcional)* una cuenta de **GCP con facturación** para publicar Gold en Cloud Storage. Sin ella, el pipeline corre igual y la tarea `subir_gold` se omite.
 
@@ -184,6 +188,12 @@ docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/anomali
 # 6. Publicar Gold en Cloud Storage (Issue 10): lo hace el DAG al final; a mano:
 docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py --dry-run   # solo muestra qué subiría
 docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py             # sube y verifica
+
+# 7. Tests de calidad (Issue 12): leen los Parquet de data/, así que corren después del paso 4 o 5
+pip install -r requirements-dev.txt
+pytest                      # contrato, nulos, llaves, coherencia y recálculo desde Silver
+pytest -m fuente            # además, cuadra el lago contra la base real en Railway (solo lectura)
+pytest --datos=sintetico    # sin datos reales: lo mismo que corre el CI
 ```
 
 > **Apagar y prender:** usa `docker compose down` (sin `-v`) y `docker compose up -d`. Zookeeper, Kafka y MySQL tienen volúmenes, así que sus datos sobreviven. `down -v` lo borra todo. Si recreas el volumen de Kafka, vacía `data/bronze` y `data/checkpoints` y reconstruye Bronze, Silver y Gold: los offsets de Bronze pertenecen al topic anterior.
@@ -193,5 +203,7 @@ docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py          
 > **Anomalías:** método IQR sobre egresos activos, por usuario y destino. "Atípico" supera Q3 + 1.5 × IQR y "extremo" supera Q3 + 3 × IQR; solo se marcan montos altos. Los grupos con menos de 8 movimientos o IQR = 0 no se evalúan. La tabla `data/gold/anomalias` no lleva la descripción del gasto. Los umbrales se cambian al ejecutar el job, con `docker exec -e ANOM_K_ATIPICO=1.0 mw-spark ...`; las variables `ANOM_MIN_MOVIMIENTOS`, `ANOM_K_ATIPICO` y `ANOM_K_EXTREMO` se leen dentro del contenedor de Spark, así que ponerlas en `.env` no tiene efecto.
 
 > **Airflow:** el DAG `moneywise_datalake` corre todos los días a las 3:00 (hora de Chihuahua) y encadena `revisar_infra → hay_datos_nuevos → bronze → silver → check_silver → gold → check_gold → anomalías → check_anomalías → subir_gold`. Si Kafka no tiene datos nuevos desde la última corrida de Bronze, se salta el resto (con el parámetro `forzar` corre igual). Los `check_*` son compuertas de calidad: si un chequeo falla, el DAG se detiene y no se publica nada. Cada tarea se reintenta 2 veces; los reintentos y las fallas se anotan en `airflow/logs/alertas.log`. Las tareas ejecutan `docker exec mw-spark ...`, por eso solo el scheduler tiene montado el socket de Docker.
+
+> **Tests de calidad:** `tests/` es una suite de pytest que corre fuera de Airflow, sin Spark ni Docker. Verifica el contrato de las tablas de Gold (columnas y tipos), los nulos en campos clave, las llaves repetidas, la coherencia entre tablas y un recálculo completo de Gold y de las anomalías desde Silver en Python puro. También prueba a sus propios chequeos: inyecta defectos a un lago sano y exige que cada uno sea detectado. `pytest -m fuente` cuadra el lago contra Railway (filas por tabla y totales por usuario y mes) usando solo `SELECT`; compara contra la base en vivo, así que úsalo justo después de correr el pipeline. En cada PR, GitHub Actions corre la suite sobre un lago sintético en Python 3.10, 3.12 y 3.14. Para apuntar a otra carpeta de datos usa `--datos-dir=RUTA` (con el signo `=`).
 
 > **Cloud Storage:** al final del DAG, `subir_gold` publica las 4 tablas de Gold en `gs://<tu-bucket>/gold/<tabla>/data.parquet` con nombre fijo (cada corrida sobrescribe la anterior), verifica tamaño y MD5 y publica `gold/_manifest.json`. Se autentica con una service account: la llave JSON vive en `gcp/credentials/` (ignorada por git) y solo el scheduler la tiene montada. Si `GCS_BUCKET` está vacío la tarea se omite y el resto del pipeline sigue igual. Para entrar al free tier el bucket debe estar en `us-central1`, `us-east1` o `us-west1`.

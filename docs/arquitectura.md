@@ -87,6 +87,28 @@ flowchart LR
 - `check_gold`: los totales de Gold cuadran con los activos de Silver, `balance = ingresos - egresos`, el balance acumulado coincide con la suma y no hay filas repetidas por llave.
 - `check_anomalias`: reglas internas más un **recálculo independiente en Python puro**, sin Spark, que debe dar las mismas anomalías y severidades.
 
+### Pruebas de calidad con pytest
+
+Además de las compuertas del DAG hay una suite de pytest (`tests/`) que corre **fuera de Airflow**, en tu equipo o en el CI, sin Spark ni Docker: lee los Parquet con `pyarrow` y compara con `Decimal` exacto.
+
+| Grupo | Qué comprueba |
+|---|---|
+| Contrato | Columnas y tipos exactos de cada tabla de Gold (el dashboard va a depender de ellos) |
+| Campos clave | Sin nulos, sin llaves repetidas, `mes` siempre día 1, sin totales ni conteos negativos |
+| Coherencia | `balance = ingresos - egresos`, el acumulado, que el gasto por destino y por tipo sume lo que el balance, y la variación contra el mes anterior |
+| Recálculo | Gold completo y las anomalías recalculados desde Silver en Python puro (`tests/referencia.py`) y comparados fila por fila con lo que dejó Spark |
+| Fuente | `pytest -m fuente`: filas por tabla y totales por usuario y mes contra Railway, con consultas `SELECT` y TLS |
+| Defectos inyectados | A un lago sano se le introduce un defecto a propósito (una columna renombrada, un total alterado, una fila de menos...) y el chequeo correspondiente **debe** detectarlo |
+
+```
+pip install -r requirements-dev.txt
+pytest                      # sobre data/ (corre el pipeline antes)
+pytest --datos=sintetico    # sobre un lago inventado, sin datos reales: lo que corre el CI
+pytest -m fuente            # además, compara contra Railway (solo lectura)
+```
+
+Dos cosas a tener en cuenta. La comparación con Railway es contra la base **en vivo**: si la app escribió desde la última corrida del pipeline habrá diferencias que no son un error del lago. Y la ruta de datos se da con signo igual (`--datos-dir=RUTA`); con un espacio, pytest la confunde con un archivo a probar.
+
 **Reintentos y alertas.** Cada tarea se reintenta 2 veces con 2 minutos de espera (`MW_REINTENTO_MINUTOS`), con un máximo de 30 minutos por intento. Cada reintento y cada falla se anota en `airflow/logs/alertas.log` y queda visible en la interfaz.
 
 ## 4. Cloud Storage
@@ -154,6 +176,7 @@ gs://<tu-bucket>/gold/
 | Correr el pipeline sin Airflow | Los 4 comandos `docker exec mw-spark ...` del README |
 | Probar el pipeline desde Airflow | Interfaz en `http://localhost:8085` → **Trigger** (con `forzar` para correr aunque no haya datos nuevos) |
 | Ver reintentos y fallas | `type airflow\logs\alertas.log` (Windows) o `cat airflow/logs/alertas.log` |
+| Correr las pruebas de calidad | `pytest` (tras correr el pipeline); `pytest -m fuente` para cuadrar contra Railway |
 | Ensayar la subida a la nube | `docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py --dry-run` |
 | Probar otros umbrales de anomalías | `docker exec -e ANOM_K_ATIPICO=1.0 mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/anomalies/anomalias_job.py` (y vuelve a correrlo sin la variable) |
 | Reconstruir Bronze, Silver y Gold desde cero | Vacía `data/bronze` y `data/checkpoints` y corre los jobs en orden |
@@ -181,7 +204,8 @@ Las variables `ANOM_*` se leen dentro del contenedor de Spark, así que se pasan
 - **La llave JSON no expira.** Se trata como una contraseña: mínimo privilegio, solo en el scheduler, y se elimina desde la consola si se filtra.
 - **Sin versionado en el bucket.** Cada corrida reemplaza la anterior; no se pueden recuperar tablas de días previos.
 - **Jupyter** usa por defecto el token `moneywise`. Escucha solo en `127.0.0.1`, pero si compartes el equipo cámbialo con `JUPYTER_TOKEN`.
-- **Pendientes del proyecto:** pruebas automáticas de calidad de datos con pytest (Issue 12) y el dashboard de BI sobre Gold (Issue 13).
+- **Pendiente del proyecto:** el dashboard de BI sobre Gold (Issue 13).
+- **Las pruebas de calidad no están dentro del DAG.** Las compuertas `check_*` sí detienen el pipeline; la suite de pytest es una segunda verificación, externa, que además cuadra contra la fuente y se corre a mano o en el CI.
 
 ## 10. Evidencia
 

@@ -51,6 +51,17 @@ def con_esquema(esquemas, tabla, **cambios):
     return nuevo
 
 
+def _esquema_bigquery(tabla, **cambios):
+    """El esquema que BigQuery debería mostrar para una tabla de Gold ya cargada (con cambios para inyectar defectos)."""
+    esquema = {columna: c.tipo_en_bigquery(tipo) for columna, tipo in c.CONTRATO[tabla].items()}
+    for columna, tipo in cambios.items():
+        if tipo is None:
+            esquema.pop(columna)
+        else:
+            esquema[columna] = tipo
+    return esquema
+
+
 def lago_sano(silver, gold, esquemas):
     """Todos los chequeos sobre el lago sin tocar. Debe dar cero problemas."""
     problemas = []
@@ -68,6 +79,9 @@ def lago_sano(silver, gold, esquemas):
     problemas += c.problemas_gold_vs_silver(gold, silver)
     problemas += c.problemas_de_anomalias(gold["anomalias"])
     problemas += c.problemas_anomalias_vs_silver(gold["anomalias"], silver)
+    for tabla in c.CONTRATO:
+        problemas += c.problemas_de_esquema_bigquery(tabla, _esquema_bigquery(tabla))
+        problemas += c.problemas_lago_vs_bigquery(tabla, gold[tabla], copy.deepcopy(gold[tabla]))
     return problemas
 
 
@@ -145,6 +159,17 @@ CASOS = {
         sin_fila(g["anomalias"], 0), s),
     "severidad distinta a la del recálculo": lambda s, g, e: c.problemas_anomalias_vs_silver(
         cambiar(g["anomalias"], primero(g["anomalias"], lambda f: f["severidad"] == "atipico"), severidad="extremo"), s),
+    "BigQuery: un decimal quedó como FLOAT": lambda s, g, e: c.problemas_de_esquema_bigquery(
+        "balance_mensual", _esquema_bigquery("balance_mensual", total_ingresos="FLOAT")),
+    "BigQuery: falta una columna": lambda s, g, e: c.problemas_de_esquema_bigquery(
+        "anomalias", _esquema_bigquery("anomalias", severidad=None)),
+    "BigQuery: le falta una fila al almacén": lambda s, g, e: c.problemas_lago_vs_bigquery(
+        "gasto_por_destino_mensual", g["gasto_por_destino_mensual"], sin_fila(g["gasto_por_destino_mensual"], 0)),
+    "BigQuery: un monto distinto al del lago": lambda s, g, e: c.problemas_lago_vs_bigquery(
+        "balance_mensual", g["balance_mensual"],
+        cambiar(g["balance_mensual"], 0, total_egresos=g["balance_mensual"][0]["total_egresos"] + UNO)),
+    "BigQuery: una fila repetida": lambda s, g, e: c.problemas_lago_vs_bigquery(
+        "anomalias", g["anomalias"], g["anomalias"] + [g["anomalias"][0]]),
     "la fuente tiene una fila más": lambda s, g, e: c.problemas_conteos_vs_fuente(
         {"egresos": len(s["egresos"])}, {"egresos": len(s["egresos"]) + 1}),
     "la fuente tiene otro total": lambda s, g, e: c.problemas_totales_vs_fuente(

@@ -243,3 +243,34 @@ def problemas_totales_vs_fuente(balance, ingresos_fuente, egresos_fuente):
         if diferencias:
             problemas.append(f"{nombre}: {len(diferencias)} (usuario, mes) no cuadran con la fuente: {_ejemplos(diferencias)}")
     return problemas
+
+
+# ---------------------------------------------------------------------------- BigQuery
+TIPOS_BIGQUERY = {"int32": "INTEGER", "int64": "INTEGER", "string": "STRING", "date32[day]": "DATE"}
+ALIAS_BIGQUERY = {"INT64": "INTEGER", "FLOAT64": "FLOAT", "BOOL": "BOOLEAN"}
+
+
+def tipo_en_bigquery(tipo_arrow):
+    """Cómo debe verse en BigQuery cada tipo del contrato de Gold (los decimales, como NUMERIC)."""
+    return "NUMERIC" if tipo_arrow.startswith("decimal128") else TIPOS_BIGQUERY[tipo_arrow]
+
+
+def problemas_de_esquema_bigquery(tabla, esquema):
+    """esquema: {columna: tipo en BigQuery}. Debe tener las columnas y tipos del contrato de Gold."""
+    esperado = {c: tipo_en_bigquery(t) for c, t in CONTRATO[tabla].items()}
+    return problemas_de_contrato({c: ALIAS_BIGQUERY.get(t, t) for c, t in esquema.items()}, esperado)
+
+
+def problemas_lago_vs_bigquery(tabla, filas_lago, filas_bigquery):
+    """La tabla de BigQuery debe ser idéntica, fila por fila, al Gold del lago."""
+    columnas = list(CONTRATO[tabla])
+    lago = Counter(_canonica(f, columnas) for f in filas_lago)
+    almacen = Counter(_canonica(f, columnas) for f in filas_bigquery)
+    faltan, sobran = lago - almacen, almacen - lago
+    if not (faltan or sobran):
+        return []
+    return [
+        f"{tabla}: BigQuery no coincide con el lago (le faltan {sum(faltan.values())} filas y le sobran {sum(sobran.values())}). "
+        f"Ejemplo faltante: {dict(next(iter(faltan))) if faltan else '-'}. "
+        f"Ejemplo sobrante: {dict(next(iter(sobran))) if sobran else '-'}"
+    ]

@@ -2,12 +2,15 @@
 
   revisar_infra -> hay_datos_nuevos -> bronze -> silver -> check_silver
                 -> gold -> check_gold -> anomalias -> check_anomalias -> subir_gold
+                -> cargar_bigquery
 
 - revisar_infra:    el conector de Debezium está RUNNING y Spark (contenedor) responde.
 - hay_datos_nuevos: compara hasta dónde llegó Kafka con hasta dónde leyó Bronze. Si no hay
                     nada nuevo, se salta el resto. Con el parámetro `forzar` corre igual.
 - Los jobs son los mismos spark-submit que se corrían a mano, vía `docker exec mw-spark`.
 - Los check_* son compuertas de calidad: si algún chequeo falla, el DAG se detiene.
+- cargar_bigquery:  carga Gold de Cloud Storage a tablas de BigQuery (gcp/cargar_bigquery.py), que es de donde
+                    lee el dashboard. Si BQ_DATASET no está configurado, la tarea queda "skipped".
 - subir_gold:       publica la capa Gold en Cloud Storage (gcp/subir_gold.py). Solo corre si todas las
                     compuertas pasaron. Si GCS_BUCKET no está configurado, la tarea queda "skipped".
 - Reintentos: 2, con 2 minutos de espera. Cada reintento y cada falla se anota en el
@@ -38,6 +41,7 @@ CHECKPOINT_BRONZE = Path(os.getenv("BRONZE_CHECKPOINT_DIR", "/opt/airflow/data/c
 ARCHIVO_ALERTAS = Path(os.getenv("AIRFLOW_ALERTS_FILE", "/opt/airflow/logs/alertas.log"))
 ESPERA_REINTENTO = timedelta(minutes=float(os.getenv("MW_REINTENTO_MINUTOS", "2")))
 GCP_SCRIPT = os.getenv("GCP_SCRIPT", "/opt/airflow/gcp/subir_gold.py")
+BQ_SCRIPT = os.getenv("BQ_SCRIPT", "/opt/airflow/gcp/cargar_bigquery.py")
 
 
 # ---------------------------------------------------------------- alertas
@@ -176,6 +180,8 @@ with DAG(
 
     # Código de salida 99 = GCS_BUCKET no configurado: Airflow marca la tarea como "skipped", no como falla.
     subir_gold = BashOperator(task_id="subir_gold", bash_command=f"python {GCP_SCRIPT}", skip_on_exit_code=99)
+    # Igual: código 99 = BQ_DATASET no configurado. Si subir_gold se omitió, esta también (no hay nada que cargar).
+    cargar_bigquery = BashOperator(task_id="cargar_bigquery", bash_command=f"python {BQ_SCRIPT}", skip_on_exit_code=99)
 
     (
         revisar_infra()
@@ -184,4 +190,5 @@ with DAG(
         >> gold >> check_gold
         >> anomalias >> check_anomalias
         >> subir_gold
+        >> cargar_bigquery
     )

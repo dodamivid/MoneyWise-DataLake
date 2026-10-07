@@ -2,3 +2,4 @@
 pyarrow==25.0.1
 pytest==9.1.1
 PyMySQL==1.2.3
+google-cloud-bigquery==3.46.1

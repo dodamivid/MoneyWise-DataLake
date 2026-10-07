@@ -209,6 +209,8 @@ services:
       <<: *airflow-env
       GCS_BUCKET: "${GCS_BUCKET:-}"
       GCP_PROJECT_ID: "${GCP_PROJECT_ID:-}"
+      BQ_DATASET: "${BQ_DATASET:-}"
+      BQ_LOCATION: "${BQ_LOCATION:-us-central1}"
       GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/gcp/credentials/service-account.json
     volumes:
       - ./airflow/dags:/opt/airflow/dags

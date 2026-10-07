@@ -3,8 +3,10 @@
   pytest                      lee los Parquet reales de data/ (corre el pipeline antes)
   pytest --datos=sintetico    usa un lago inventado, sin datos reales (es lo que corre el CI)
   pytest -m fuente            además compara contra la base real en Railway (solo lectura)
+  pytest -m bigquery          además compara las tablas de BigQuery contra el lago (solo lectura)
 """
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,13 +16,14 @@ import datos_sinteticos
 from calidad import CONTRATO
 
 RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(RAIZ / "gcp"))  # para poder probar cargar_bigquery.py y subir_gold.py
 TABLAS_SILVER = ("usuarios", "destinos", "procedencias", "tipos_egreso", "tipos_ingreso", "frecuencias",
                  "ingresos", "egresos", "inversiones", "metas", "fechas_corte_ahorro")
 SILVER_NECESARIAS = ("ingresos", "egresos", "destinos", "tipos_egreso")
 
 
 def _cargar_env():
-    """Lee RAILWAY_MYSQL_* del .env (sin pisar lo que ya esté en el entorno)."""
+    """Lee el .env (RAILWAY_MYSQL_*, BQ_DATASET, GCP_PROJECT_ID...) sin pisar lo que ya esté en el entorno."""
     ruta = RAIZ / ".env"
     if not ruta.exists():
         return
@@ -32,6 +35,9 @@ def _cargar_env():
 
 
 _cargar_env()
+_llave = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if _llave and not Path(_llave).is_absolute() and (RAIZ / _llave).exists():
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(RAIZ / _llave)  # el .env la guarda relativa al repo
 
 
 def pytest_addoption(parser):

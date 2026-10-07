@@ -30,6 +30,7 @@ sequenceDiagram
     participant A as Airflow
     participant S as Spark
     participant G as Cloud Storage
+    participant Q as BigQuery
     participant B as Dashboard
 
     U->>DB: registra un egreso (INSERT)
@@ -40,7 +41,8 @@ sequenceDiagram
     A->>S: bronze, silver, gold y anomalías (docker exec)
     S-->>A: código de salida 0 tras cada job y cada chequeo
     A->>G: subir_gold: 4 tablas y manifiesto
-    B->>G: lee gold/ (Issue 13)
+    A->>Q: cargar_bigquery: 4 tablas, reemplazo atómico
+    B->>Q: consulta las tablas de Gold (Issue 13)
 ```
 
 Lo importante: **la app nunca sabe que existe el data lake**. Debezium lee el registro binario (binlog) de MySQL, que la base escribe de todos modos, así que no hay que tocar la aplicación ni consultar sus tablas.
@@ -70,7 +72,7 @@ flowchart LR
     A["revisar_infra<br/>conector RUNNING y Spark responde"] --> B{"hay_datos_nuevos<br/>Kafka contra el checkpoint de Bronze"}
     B -- "hay datos, o forzar" --> C["bronze"]
     B -- "nada nuevo" --> Z(["Fin: se salta el resto"])
-    C --> D["silver"] --> E["check_silver"]:::compuerta --> F["gold"] --> G["check_gold"]:::compuerta --> H["anomalias"] --> I["check_anomalias"]:::compuerta --> J["subir_gold<br/>Cloud Storage"]
+    C --> D["silver"] --> E["check_silver"]:::compuerta --> F["gold"] --> G["check_gold"]:::compuerta --> H["anomalias"] --> I["check_anomalias"]:::compuerta --> J["subir_gold<br/>Cloud Storage"] --> K["cargar_bigquery<br/>BigQuery"]
     classDef compuerta stroke-width:4px
 ```
 
@@ -81,6 +83,7 @@ flowchart LR
 | `bronze`, `silver`, `gold`, `anomalias` | Los mismos `spark-submit` que se corrían a mano, vía `docker exec mw-spark` |
 | `check_silver`, `check_gold`, `check_anomalias` | **Compuertas de calidad.** Terminan con código 1 si algún chequeo falla, y entonces el DAG se detiene |
 | `subir_gold` | Publica Gold en Cloud Storage. Si `GCS_BUCKET` está vacío queda `skipped` |
+| `cargar_bigquery` | Carga las 4 tablas de Gold de Cloud Storage a BigQuery. Si `BQ_DATASET` está vacío, o `subir_gold` se omitió, queda `skipped` |
 
 **Qué verifica cada compuerta:**
 - `check_silver`: cada tabla tiene filas, sin ids repetidos, ninguna fila cuyo último evento fue un DELETE y sin montos nulos.
@@ -98,6 +101,7 @@ Además de las compuertas del DAG hay una suite de pytest (`tests/`) que corre *
 | Coherencia | `balance = ingresos - egresos`, el acumulado, que el gasto por destino y por tipo sume lo que el balance, y la variación contra el mes anterior |
 | Recálculo | Gold completo y las anomalías recalculados desde Silver en Python puro (`tests/referencia.py`) y comparados fila por fila con lo que dejó Spark |
 | Fuente | `pytest -m fuente`: filas por tabla y totales por usuario y mes contra Railway, con consultas `SELECT` y TLS |
+| Almacén | `pytest -m bigquery`: cada tabla de BigQuery tiene el contrato de Gold y es idéntica, fila por fila, al Parquet del lago |
 | Defectos inyectados | A un lago sano se le introduce un defecto a propósito (una columna renombrada, un total alterado, una fila de menos...) y el chequeo correspondiente **debe** detectarlo |
 
 ```
@@ -139,6 +143,24 @@ gs://<tu-bucket>/gold/
 5. En `.env` pon `GCP_PROJECT_ID` y `GCS_BUCKET`, y crea una alerta de presupuesto de $1 USD.
 6. Recrea el scheduler: `docker compose up -d airflow-scheduler`.
 
+### Cargar Gold en BigQuery
+
+`cargar_bigquery` (script `gcp/cargar_bigquery.py`) es la última tarea del DAG. Es el patrón habitual en GCP: el lago guarda los archivos y un **almacén** sirve las tablas curadas a las herramientas de BI, que consultan SQL en lugar de leer archivos.
+
+- **Un trabajo de carga por tabla**, desde `gs://<bucket>/gold/<tabla>/data.parquet` hacia `<proyecto>.<dataset>.<tabla>`, con `WRITE_TRUNCATE`: la tabla se reemplaza completa en una sola actualización atómica. Cargar datos desde Cloud Storage a BigQuery no cuesta.
+- **Tablas nativas, no externas.** Las tablas externas leen los archivos en cada consulta y cada una se cobra por bytes leídos, y BI Engine (la aceleración de BigQuery para dashboards) no las soporta.
+- **Decimales forzados a `NUMERIC`.** Si un decimal de Parquet no cupiera, la carga falla en lugar de cambiar de tipo en silencio. El contrato completo (columnas y tipos) lo verifica `pytest -m bigquery`.
+- **Verificación al cargar:** las columnas son las esperadas y la tabla tiene tantas filas como informó el trabajo. Si algo no coincide, falla y las tablas siguientes no se cargan.
+- **Si falla `cargar_bigquery`**, `subir_gold` ya terminó: Cloud Storage tiene el Gold nuevo y BigQuery conserva el anterior. La alerta lo avisa.
+- Las 4 tablas se reemplazan una tras otra, no en una sola transacción: durante unos segundos el almacén puede tener tablas de dos corridas distintas.
+
+**Configurarlo (una sola vez, opcional):**
+
+1. En BigQuery, crea un **dataset** (por ejemplo `moneywise_gold`; solo letras, números y guiones bajos) en la **misma región que el bucket**.
+2. A la service account del scheduler dale *BigQuery Job User* en el proyecto y *BigQuery Data Editor* **solo sobre ese dataset**. Para leer el bucket ya tiene su rol.
+3. En `.env` pon `BQ_DATASET` (y `BQ_LOCATION` si no es `us-central1`).
+4. Recrea el scheduler: `docker compose up -d airflow-scheduler`.
+
 ## 5. Decisiones de diseño y por qué
 
 | Decisión | Por qué |
@@ -156,7 +178,9 @@ gs://<tu-bucket>/gold/
 | **Airflow con `LocalExecutor` y `docker exec`** | Es lo más simple y reproduce exactamente los comandos manuales. El costo: el socket de Docker da control sobre Docker del equipo, así que solo el scheduler lo tiene |
 | **Compuertas de calidad que fallan de verdad** | Un chequeo que solo imprime `FALLA` no detiene nada; así no se publica un Gold dudoso |
 | **Nombres fijos y manifiesto al final en Cloud Storage** | Sin versiones acumuladas, sobrescritura atómica y una señal clara de que la publicación terminó |
-| **Llave JSON de mínimo privilegio**, montada solo en el scheduler y fuera de la imagen | Si se filtra, el daño se limita a un bucket |
+| **Llave JSON de mínimo privilegio**, montada solo en el scheduler y fuera de la imagen | Si se filtra, el daño se limita a un bucket y a un dataset |
+| **Tablas nativas de BigQuery cargadas por el DAG** (no tablas externas ni URLs firmadas) | Es el patrón de la industria: la BI consulta un almacén. Las tablas nativas se pueden acelerar con BI Engine, la carga es gratis y se actualizan solas con cada corrida |
+| **Decimales forzados a `NUMERIC`** | Un decimal que no cupiera hace fallar la carga en vez de cambiar de tipo sin avisar |
 
 ## 6. Seguridad
 
@@ -165,6 +189,7 @@ gs://<tu-bucket>/gold/
 - **Usuario de Debezium.** Solo tiene los permisos que el CDC necesita (`SELECT`, `RELOAD`, `SHOW DATABASES`, `REPLICATION SLAVE`, `REPLICATION CLIENT`); no puede escribir.
 - **Datos personales.** Gold solo lleva `usuario_id`; `anomalias` no guarda la descripción del gasto; `password_hash` nunca entra al lake.
 - **Docker.** Solo el scheduler de Airflow monta el socket de Docker, y solo él ve la carpeta `gcp/` (en solo lectura).
+- **BigQuery.** La service account solo recibe *BigQuery Job User* (para lanzar trabajos) y *BigQuery Data Editor* sobre un único dataset. La misma llave puede escribir en el bucket y en ese dataset; en un equipo real se usarían cuentas separadas por función o identidades sin llaves.
 
 ## 7. Operación del día a día
 
@@ -178,6 +203,7 @@ gs://<tu-bucket>/gold/
 | Ver reintentos y fallas | `type airflow\logs\alertas.log` (Windows) o `cat airflow/logs/alertas.log` |
 | Correr las pruebas de calidad | `pytest` (tras correr el pipeline); `pytest -m fuente` para cuadrar contra Railway |
 | Ensayar la subida a la nube | `docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py --dry-run` |
+| Ensayar la carga a BigQuery | `docker exec mw-airflow-scheduler python /opt/airflow/gcp/cargar_bigquery.py --dry-run` |
 | Probar otros umbrales de anomalías | `docker exec -e ANOM_K_ATIPICO=1.0 mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/anomalies/anomalias_job.py` (y vuelve a correrlo sin la variable) |
 | Reconstruir Bronze, Silver y Gold desde cero | Vacía `data/bronze` y `data/checkpoints` y corre los jobs en orden |
 
@@ -202,14 +228,15 @@ Las variables `ANOM_*` se leen dentro del contenedor de Spark, así que se pasan
 - **Retención.** Kafka conserva los mensajes unos 7 días por defecto y el binlog de Railway 30. Si Bronze no corre durante más que la retención de Kafka, los eventos no leídos se pierden del topic.
 - **Alertas locales.** Los avisos quedan en un archivo y en la interfaz. El correo requiere un servidor SMTP y otro secreto, y no está implementado.
 - **La llave JSON no expira.** Se trata como una contraseña: mínimo privilegio, solo en el scheduler, y se elimina desde la consola si se filtra.
+- **Una tabla de Parquet vacía no se ha probado contra BigQuery real.** Si algún día `anomalias` quedara sin filas y BigQuery rechazara el archivo, `cargar_bigquery` fallaría y alertaría en lugar de dejar una tabla vacía.
 - **Sin versionado en el bucket.** Cada corrida reemplaza la anterior; no se pueden recuperar tablas de días previos.
 - **Jupyter** usa por defecto el token `moneywise`. Escucha solo en `127.0.0.1`, pero si compartes el equipo cámbialo con `JUPYTER_TOKEN`.
-- **Pendiente del proyecto:** el dashboard de BI sobre Gold (Issue 13).
+- **Pendiente del proyecto:** el dashboard en Power BI Desktop sobre las tablas de BigQuery (Issue 13, segunda parte).
 - **Las pruebas de calidad no están dentro del DAG.** Las compuertas `check_*` sí detienen el pipeline; la suite de pytest es una segunda verificación, externa, que además cuadra contra la fuente y se corre a mano o en el CI.
 
 ## 10. Evidencia
 
-Corrida del DAG `moneywise_datalake` con las 10 tareas en verde. La columna roja del historial es la prueba de falla con el conector de Debezium apagado (ver la [sección 3](#3-el-dag-de-airflow)).
+Corrida del DAG `moneywise_datalake` con las 10 tareas que tenía entonces, en verde (después se agregó `cargar_bigquery`, la tarea 11). La columna roja del historial es la prueba de falla con el conector de Debezium apagado (ver la [sección 3](#3-el-dag-de-airflow)).
 
 ![Corrida del DAG moneywise_datalake con las 10 tareas en verde](images/airflow-dag.png)
 

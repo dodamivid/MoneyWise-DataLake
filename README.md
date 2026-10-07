@@ -36,11 +36,12 @@ flowchart LR
     end
 
     subgraph ORQ["Orquestación: Airflow, todos los días a las 3:00"]
-        AIRFLOW["DAG moneywise_datalake<br/>10 tareas, compuertas de calidad<br/>reintentos y alertas"]
+        AIRFLOW["DAG moneywise_datalake<br/>11 tareas, compuertas de calidad<br/>reintentos y alertas"]
     end
 
     subgraph NUBE["Nube: GCP"]
         GCS[("Cloud Storage<br/>gold/ y manifiesto")]
+        BQ[("BigQuery<br/>tablas de Gold")]
     end
 
     subgraph BI["Business Intelligence"]
@@ -51,10 +52,11 @@ flowchart LR
     KAFKA --> VERIFY
     KAFKA --> BRONZE --> SILVER --> GOLD
     SILVER --> ANOM -->|tabla anomalias| GOLD
-    GOLD -->|subir_gold| GCS --> DASH
+    GOLD -->|subir_gold| GCS -->|cargar_bigquery| BQ --> DASH
     AIRFLOW -.->|revisa conector y offsets| CDC
     AIRFLOW -.->|orquesta| LAKE
     AIRFLOW -.->|publica| GCS
+    AIRFLOW -.->|carga| BQ
 
     classDef pendiente stroke-dasharray: 5 5
     class DASH pendiente
@@ -73,7 +75,8 @@ flowchart LR
 | Anomalías | Spark | Gastos inusualmente altos por usuario y destino (IQR: atípico y extremo) |
 | Orquestación | Airflow | DAG diario con compuertas de calidad, reintentos y alertas |
 | Salida cloud | GCP Cloud Storage | `gold/<tabla>/data.parquet` y un manifiesto, con una service account de mínimo privilegio |
-| BI | Power BI / Metabase | Dashboard sobre Gold (Issue 13, pendiente) |
+| Almacén | BigQuery | Tablas nativas de Gold cargadas por el DAG (`WRITE_TRUNCATE`, decimales como `NUMERIC`); de ahí lee el dashboard |
+| BI | Power BI Desktop | Dashboard sobre las tablas de BigQuery (Issue 13, en progreso) |
 
 > **Más detalle:** [docs/arquitectura.md](docs/arquitectura.md) explica el flujo de un cambio de punta a punta, las decisiones de diseño y por qué, la seguridad y los problemas que aparecieron.
 
@@ -97,7 +100,7 @@ monelake/
 │   └── common/               # schemas por tabla
 ├── anomalies/                # detección de anomalías (IQR) y su verificador            [Issue 8]
 ├── airflow/                  # Dockerfile y DAG moneywise_datalake                      [Issue 9]
-├── gcp/                      # subir_gold.py: Gold → Cloud Storage                      [Issue 10]
+├── gcp/                      # subir_gold.py (Gold → Cloud Storage) y cargar_bigquery.py (→ BigQuery) [Issues 10 y 13]
 ├── data/{bronze,silver,gold}/  # salida Parquet local (no versionada)
 ├── tests/                    # pytest: calidad de Gold, defectos inyectados y cuadre con Railway [Issue 12]
 ├── dashboard/                # conexión y capturas del dashboard de BI                  [Issue 13]
@@ -125,7 +128,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 | [10](https://github.com/dodamivid/MoneyWise-DataLake/issues/10) | Salida a Cloud (GCP) | 🟢 Completo | Nube — GCP Cloud Storage (capa Gold) |
 | [11](https://github.com/dodamivid/MoneyWise-DataLake/issues/11) | Documentación y diagrama de arquitectura | 🟢 Completo | Transversal — documentación |
 | [12](https://github.com/dodamivid/MoneyWise-DataLake/issues/12) | Tests de calidad de datos | 🟢 Completo | Transversal — QA sobre capa Gold |
-| [13](https://github.com/dodamivid/MoneyWise-DataLake/issues/13) | Dashboard de BI conectado a Gold | ⚪ Pendiente | Business Intelligence (depende del Issue 7) |
+| [13](https://github.com/dodamivid/MoneyWise-DataLake/issues/13) | Dashboard de BI conectado a Gold | 🟡 En progreso | Business Intelligence (depende del Issue 7) |
 
 > **Reglas de Gold:** solo movimientos activos (`eliminado_en` vacío); cada movimiento cuenta una vez, sin repartir los recurrentes por frecuencia; el mes sale de `fecha_inicio`; sin datos personales (solo `usuario_id`). Son las mismas reglas que usan los `sp_dashboard_*` de la app.
 
@@ -140,7 +143,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 - **Docker Desktop** con unos **8 GB de RAM** asignados (Airflow pide al menos 4 GB y aquí corren además Kafka y Spark).
 - **Python 3.10+** en tu equipo, para el verificador de eventos (`kafka/scripts/verify_events.py`) y los tests de calidad. Spark corre dentro de Docker: no necesitas Java.
 - Una base **MySQL en Railway** con el binlog activado y un usuario para Debezium (ver abajo).
-- *(Opcional)* una cuenta de **GCP con facturación** para publicar Gold en Cloud Storage. Sin ella, el pipeline corre igual y la tarea `subir_gold` se omite.
+- *(Opcional)* una cuenta de **GCP con facturación** para publicar Gold en Cloud Storage y cargarlo en BigQuery. Sin ella, el pipeline corre igual y las tareas `subir_gold` y `cargar_bigquery` se omiten.
 
 ### Preparación (una sola vez)
 
@@ -189,10 +192,15 @@ docker exec mw-spark /usr/local/spark/bin/spark-submit /home/jovyan/work/anomali
 docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py --dry-run   # solo muestra qué subiría
 docker exec mw-airflow-scheduler python /opt/airflow/gcp/subir_gold.py             # sube y verifica
 
-# 7. Tests de calidad (Issue 12): leen los Parquet de data/, así que corren después del paso 4 o 5
+# 7. Cargar Gold en BigQuery (Issue 13): lo hace el DAG tras subir_gold; a mano:
+docker exec mw-airflow-scheduler python /opt/airflow/gcp/cargar_bigquery.py --dry-run   # solo muestra qué cargaría
+docker exec mw-airflow-scheduler python /opt/airflow/gcp/cargar_bigquery.py             # carga y verifica
+
+# 8. Tests de calidad (Issue 12): leen los Parquet de data/, así que corren después del paso 4 o 5
 pip install -r requirements-dev.txt
 pytest                      # contrato, nulos, llaves, coherencia y recálculo desde Silver
 pytest -m fuente            # además, cuadra el lago contra la base real en Railway (solo lectura)
+pytest -m bigquery          # además, cuadra las tablas de BigQuery contra el lago (solo lectura)
 pytest --datos=sintetico    # sin datos reales: lo mismo que corre el CI
 ```
 
@@ -202,8 +210,10 @@ pytest --datos=sintetico    # sin datos reales: lo mismo que corre el CI
 
 > **Anomalías:** método IQR sobre egresos activos, por usuario y destino. "Atípico" supera Q3 + 1.5 × IQR y "extremo" supera Q3 + 3 × IQR; solo se marcan montos altos. Los grupos con menos de 8 movimientos o IQR = 0 no se evalúan. La tabla `data/gold/anomalias` no lleva la descripción del gasto. Los umbrales se cambian al ejecutar el job, con `docker exec -e ANOM_K_ATIPICO=1.0 mw-spark ...`; las variables `ANOM_MIN_MOVIMIENTOS`, `ANOM_K_ATIPICO` y `ANOM_K_EXTREMO` se leen dentro del contenedor de Spark, así que ponerlas en `.env` no tiene efecto.
 
-> **Airflow:** el DAG `moneywise_datalake` corre todos los días a las 3:00 (hora de Chihuahua) y encadena `revisar_infra → hay_datos_nuevos → bronze → silver → check_silver → gold → check_gold → anomalías → check_anomalías → subir_gold`. Si Kafka no tiene datos nuevos desde la última corrida de Bronze, se salta el resto (con el parámetro `forzar` corre igual). Los `check_*` son compuertas de calidad: si un chequeo falla, el DAG se detiene y no se publica nada. Cada tarea se reintenta 2 veces; los reintentos y las fallas se anotan en `airflow/logs/alertas.log`. Las tareas ejecutan `docker exec mw-spark ...`, por eso solo el scheduler tiene montado el socket de Docker.
+> **Airflow:** el DAG `moneywise_datalake` corre todos los días a las 3:00 (hora de Chihuahua) y encadena `revisar_infra → hay_datos_nuevos → bronze → silver → check_silver → gold → check_gold → anomalías → check_anomalías → subir_gold → cargar_bigquery`. Si Kafka no tiene datos nuevos desde la última corrida de Bronze, se salta el resto (con el parámetro `forzar` corre igual). Los `check_*` son compuertas de calidad: si un chequeo falla, el DAG se detiene y no se publica nada. Cada tarea se reintenta 2 veces; los reintentos y las fallas se anotan en `airflow/logs/alertas.log`. Las tareas ejecutan `docker exec mw-spark ...`, por eso solo el scheduler tiene montado el socket de Docker.
 
-> **Tests de calidad:** `tests/` es una suite de pytest que corre fuera de Airflow, sin Spark ni Docker. Verifica el contrato de las tablas de Gold (columnas y tipos), los nulos en campos clave, las llaves repetidas, la coherencia entre tablas y un recálculo completo de Gold y de las anomalías desde Silver en Python puro. También prueba a sus propios chequeos: inyecta defectos a un lago sano y exige que cada uno sea detectado. `pytest -m fuente` cuadra el lago contra Railway (filas por tabla y totales por usuario y mes) usando solo `SELECT`; compara contra la base en vivo, así que úsalo justo después de correr el pipeline. En cada PR, GitHub Actions corre la suite sobre un lago sintético en Python 3.10, 3.12 y 3.14. Para apuntar a otra carpeta de datos usa `--datos-dir=RUTA` (con el signo `=`).
+> **Tests de calidad:** `tests/` es una suite de pytest que corre fuera de Airflow, sin Spark ni Docker. Verifica el contrato de las tablas de Gold (columnas y tipos), los nulos en campos clave, las llaves repetidas, la coherencia entre tablas y un recálculo completo de Gold y de las anomalías desde Silver en Python puro. También prueba a sus propios chequeos: inyecta defectos a un lago sano y exige que cada uno sea detectado. `pytest -m fuente` cuadra el lago contra Railway (filas por tabla y totales por usuario y mes) usando solo `SELECT`; compara contra la base en vivo, así que úsalo justo después de correr el pipeline. `pytest -m bigquery` hace lo mismo con las tablas de BigQuery: cada una debe tener el contrato de Gold y ser idéntica, fila por fila, al Parquet del lago. En cada PR, GitHub Actions corre la suite sobre un lago sintético en Python 3.10, 3.12 y 3.14. Para apuntar a otra carpeta de datos usa `--datos-dir=RUTA` (con el signo `=`).
 
 > **Cloud Storage:** al final del DAG, `subir_gold` publica las 4 tablas de Gold en `gs://<tu-bucket>/gold/<tabla>/data.parquet` con nombre fijo (cada corrida sobrescribe la anterior), verifica tamaño y MD5 y publica `gold/_manifest.json`. Se autentica con una service account: la llave JSON vive en `gcp/credentials/` (ignorada por git) y solo el scheduler la tiene montada. Si `GCS_BUCKET` está vacío la tarea se omite y el resto del pipeline sigue igual. Para entrar al free tier el bucket debe estar en `us-central1`, `us-east1` o `us-west1`.
+
+> **BigQuery:** tras subir Gold, `cargar_bigquery` lo carga a tablas nativas del dataset `BQ_DATASET` (en la misma región que el bucket) con un trabajo de carga por tabla y `WRITE_TRUNCATE`: cada tabla se reemplaza completa en una sola actualización atómica. Los decimales se fuerzan a `NUMERIC` (si alguno no cupiera, la carga falla en lugar de cambiar de tipo) y se verifica que las columnas y el número de filas sean los esperados. La cuenta de servicio necesita *BigQuery Job User* en el proyecto y *BigQuery Data Editor* sobre el dataset. Si `BQ_DATASET` está vacío, la tarea se omite. Cargar datos desde Cloud Storage es gratis; las consultas del dashboard caben de sobra en el free tier.

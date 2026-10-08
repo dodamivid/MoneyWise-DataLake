@@ -7,7 +7,7 @@ Este documento explica **cómo funciona** el data lake, **por qué** se tomó ca
 1. [Un cambio de punta a punta](#1-un-cambio-de-punta-a-punta)
 2. [Las capas de datos](#2-las-capas-de-datos)
 3. [El DAG de Airflow](#3-el-dag-de-airflow)
-4. [Cloud Storage](#4-cloud-storage)
+4. [Cloud Storage, BigQuery y el dashboard](#4-cloud-storage-bigquery-y-el-dashboard)
 5. [Decisiones de diseño y por qué](#5-decisiones-de-diseño-y-por-qué)
 6. [Seguridad](#6-seguridad)
 7. [Operación del día a día](#7-operación-del-día-a-día)
@@ -42,7 +42,7 @@ sequenceDiagram
     S-->>A: código de salida 0 tras cada job y cada chequeo
     A->>G: subir_gold: 4 tablas y manifiesto
     A->>Q: cargar_bigquery: 4 tablas, reemplazo atómico
-    B->>Q: consulta las tablas de Gold (Issue 13)
+    B->>Q: Power BI importa las tablas de Gold (Issue 13)
 ```
 
 Lo importante: **la app nunca sabe que existe el data lake**. Debezium lee el registro binario (binlog) de MySQL, que la base escribe de todos modos, así que no hay que tocar la aplicación ni consultar sus tablas.
@@ -115,7 +115,7 @@ Dos cosas a tener en cuenta. La comparación con Railway es contra la base **en 
 
 **Reintentos y alertas.** Cada tarea se reintenta 2 veces con 2 minutos de espera (`MW_REINTENTO_MINUTOS`), con un máximo de 30 minutos por intento. Cada reintento y cada falla se anota en `airflow/logs/alertas.log` y queda visible en la interfaz.
 
-## 4. Cloud Storage
+## 4. Cloud Storage, BigQuery y el dashboard
 
 `subir_gold` (script `gcp/subir_gold.py`) deja esto en el bucket:
 
@@ -161,6 +161,15 @@ gs://<tu-bucket>/gold/
 3. En `.env` pon `BQ_DATASET` (y `BQ_LOCATION` si no es `us-central1`).
 4. Recrea el scheduler: `docker compose up -d airflow-scheduler`.
 
+### Dashboard en Power BI
+
+El dashboard (`dashboard/moneywise-gold.pbix`) es el último eslabón: Power BI Desktop **importa** las 4 tablas de BigQuery y las muestra en 4 páginas (balance, gasto por categoría, variación mensual y anomalías). La guía completa, con el modelo, las medidas y las capturas, está en [dashboard/README.md](../dashboard/README.md); aquí, lo esencial:
+
+- **Modo Importar.** Los datos se copian al archivo, así que el dashboard responde sin consultar BigQuery en cada clic y no consume cuota. El costo: se actualiza al pulsar **Actualizar**, no solo.
+- **Dos dimensiones y siete relaciones.** `dim_usuario` y `dim_mes` (una fila por usuario y por mes) se relacionan con las tablas de hechos de uno a muchos y con filtro en una sola dirección. Así un selector de usuario o de mes filtra las cuatro tablas a la vez, y las tablas de hechos nunca se filtran entre sí.
+- **Medidas DAX.** Los totales, el balance acumulado y la variación contra el mes anterior son medidas que Power BI recalcula con cada filtro. La variación se calcula sobre los totales y no se suma la columna `variacion_pct`, porque un porcentaje por fila no se puede sumar.
+- **Se comprobó a mano contra BigQuery.** `pytest -m bigquery` garantiza que BigQuery es idéntico al lago, pero no ve a Power BI; por eso las cifras de cada página se contrastaron con consultas SQL (detalle en el README del dashboard).
+
 ## 5. Decisiones de diseño y por qué
 
 | Decisión | Por qué |
@@ -181,6 +190,9 @@ gs://<tu-bucket>/gold/
 | **Llave JSON de mínimo privilegio**, montada solo en el scheduler y fuera de la imagen | Si se filtra, el daño se limita a un bucket y a un dataset |
 | **Tablas nativas de BigQuery cargadas por el DAG** (no tablas externas ni URLs firmadas) | Es el patrón de la industria: la BI consulta un almacén. Las tablas nativas se pueden acelerar con BI Engine, la carga es gratis y se actualizan solas con cada corrida |
 | **Decimales forzados a `NUMERIC`** | Un decimal que no cupiera hace fallar la carga en vez de cambiar de tipo sin avisar |
+| **Power BI en modo Importar**, no DirectQuery | Sobre unos cientos de filas, importar es instantáneo y no gasta consultas de BigQuery; DirectQuery solo valdría la pena con datos enormes o que cambian a cada minuto |
+| **Dimensiones `dim_usuario` y `dim_mes`** | Un selector sobre una tabla de hechos solo filtra esa tabla; con una dimensión compartida filtra todas |
+| **`Variación %` como medida** | La columna `variacion_pct` está en puntos porcentuales por fila y no se puede sumar; la medida da el cambio real en filas sueltas y en totales |
 
 ## 6. Seguridad
 
@@ -231,7 +243,9 @@ Las variables `ANOM_*` se leen dentro del contenedor de Spark, así que se pasan
 - **Una tabla de Parquet vacía no se ha probado contra BigQuery real.** Si algún día `anomalias` quedara sin filas y BigQuery rechazara el archivo, `cargar_bigquery` fallaría y alertaría en lugar de dejar una tabla vacía.
 - **Sin versionado en el bucket.** Cada corrida reemplaza la anterior; no se pueden recuperar tablas de días previos.
 - **Jupyter** usa por defecto el token `moneywise`. Escucha solo en `127.0.0.1`, pero si compartes el equipo cámbialo con `JUPYTER_TOKEN`.
-- **Pendiente del proyecto:** el dashboard en Power BI Desktop sobre las tablas de BigQuery (Issue 13, segunda parte).
+- **En el dashboard, destino y tipo no se filtran entre sí.** `gasto_por_destino_mensual` no tiene `tipo` y `gasto_por_tipo_mensual` no tiene `destino`, así que un filtro de destino no puede afectar al gráfico de tipo de pago, ni al revés. Mejora pendiente: una tabla de Gold `gasto_por_destino_tipo_mensual` con usuario, mes, destino y tipo.
+- **El dashboard no se actualiza solo.** Modo Importar: el DAG renueva BigQuery cada día, pero el `.pbix` guarda su copia hasta que alguien pulse **Actualizar**. Refrescarlo en automático requeriría publicarlo en el servicio de Power BI.
+- **Las transformaciones de Spark no tienen pruebas unitarias propias.** Se comprueban por sus resultados (recálculo completo en Python puro y compuertas del DAG), pero no hay pruebas que ejecuten el código de Spark sobre entradas pequeñas y conocidas.
 - **Las pruebas de calidad no están dentro del DAG.** Las compuertas `check_*` sí detienen el pipeline; la suite de pytest es una segunda verificación, externa, que además cuadra contra la fuente y se corre a mano o en el CI.
 
 ## 10. Evidencia
@@ -243,3 +257,17 @@ Corrida del DAG `moneywise_datalake` con las 10 tareas que tenía entonces, en v
 Bucket de Cloud Storage con la capa Gold publicada: el manifiesto y una carpeta por tabla.
 
 ![Bucket de Cloud Storage con la capa Gold](images/gcs-bucket.png)
+
+Corrida del DAG con las 11 tareas, incluida `cargar_bigquery`, en verde.
+
+![Corrida del DAG moneywise_datalake con las 11 tareas en verde](images/airflow-dag-11-tareas.png)
+
+Las 4 tablas de Gold en BigQuery, dentro del dataset `moneywise_gold`.
+
+![Tablas de Gold en BigQuery](images/bigquery-tablas.png)
+
+Modelo de Power BI: cuatro tablas de hechos y dos dimensiones, con sus siete relaciones.
+
+![Modelo de Power BI](images/powerbi-modelo.png)
+
+Las cuatro páginas del dashboard, con su detalle en [dashboard/README.md](../dashboard/README.md): [Balance](images/dashboard-balance.png), [Gasto por categoría](images/dashboard-gasto-categoria.png), [Variación mensual](images/dashboard-variacion-mensual.png) y [Anomalías](images/dashboard-anomalias.png).

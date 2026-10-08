@@ -7,7 +7,7 @@ Data lake financiero con **CDC (Change Data Capture) en tiempo real**. Captura c
 por Kafka y los procesa con Spark Structured Streaming en un modelo por capas
 **Bronze → Silver → Gold** (Parquet local). Sobre las capas curadas corre un módulo de
 **detección de anomalías**, todo orquestado con **Airflow**, y la capa Gold se publica en
-**GCP Cloud Storage** para alimentar un **dashboard de BI**.
+**GCP** (Cloud Storage y BigQuery) para alimentar un **dashboard de BI en Power BI**.
 
 > Fuente de datos: schema de dominio financiero (usuarios, ingresos, egresos, metas)
 > adaptado de *MoneyWise-Integracion*.
@@ -45,7 +45,7 @@ flowchart LR
     end
 
     subgraph BI["Business Intelligence"]
-        DASH["Dashboard<br/>pendiente: Issue 13"]
+        DASH["Dashboard<br/>Power BI Desktop, 4 páginas"]
     end
 
     RAILWAY -->|binlog| DBZ --> KAFKA
@@ -57,9 +57,6 @@ flowchart LR
     AIRFLOW -.->|orquesta| LAKE
     AIRFLOW -.->|publica| GCS
     AIRFLOW -.->|carga| BQ
-
-    classDef pendiente stroke-dasharray: 5 5
-    class DASH pendiente
 ```
 
 ### Flujo resumido
@@ -76,7 +73,9 @@ flowchart LR
 | Orquestación | Airflow | DAG diario con compuertas de calidad, reintentos y alertas |
 | Salida cloud | GCP Cloud Storage | `gold/<tabla>/data.parquet` y un manifiesto, con una service account de mínimo privilegio |
 | Almacén | BigQuery | Tablas nativas de Gold cargadas por el DAG (`WRITE_TRUNCATE`, decimales como `NUMERIC`); de ahí lee el dashboard |
-| BI | Power BI Desktop | Dashboard sobre las tablas de BigQuery (Issue 13, en progreso) |
+| BI | Power BI Desktop | Dashboard de 4 páginas (balance, gasto por categoría, variación mensual y anomalías) sobre las tablas de BigQuery, en modo Importar. Guía en [dashboard/README.md](dashboard/README.md) |
+
+![Dashboard: página Balance](docs/images/dashboard-balance.png)
 
 > **Más detalle:** [docs/arquitectura.md](docs/arquitectura.md) explica el flujo de un cambio de punta a punta, las decisiones de diseño y por qué, la seguridad y los problemas que aparecieron.
 
@@ -103,7 +102,7 @@ monelake/
 ├── gcp/                      # subir_gold.py (Gold → Cloud Storage) y cargar_bigquery.py (→ BigQuery) [Issues 10 y 13]
 ├── data/{bronze,silver,gold}/  # salida Parquet local (no versionada)
 ├── tests/                    # pytest: calidad de Gold, defectos inyectados y cuadre con Railway [Issue 12]
-├── dashboard/                # conexión y capturas del dashboard de BI                  [Issue 13]
+├── dashboard/                # moneywise-gold.pbix (Power BI) y su guía: conexión, modelo y medidas [Issue 13]
 ├── docs/                     # arquitectura, decisiones y problemas resueltos           [Issue 11]
 └── scripts/                  # create_issues.sh (crea las 13 issues) y generar_secretos.py (secretos de Airflow)
 ```
@@ -128,7 +127,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 | [10](https://github.com/dodamivid/MoneyWise-DataLake/issues/10) | Salida a Cloud (GCP) | 🟢 Completo | Nube — GCP Cloud Storage (capa Gold) |
 | [11](https://github.com/dodamivid/MoneyWise-DataLake/issues/11) | Documentación y diagrama de arquitectura | 🟢 Completo | Transversal — documentación |
 | [12](https://github.com/dodamivid/MoneyWise-DataLake/issues/12) | Tests de calidad de datos | 🟢 Completo | Transversal — QA sobre capa Gold |
-| [13](https://github.com/dodamivid/MoneyWise-DataLake/issues/13) | Dashboard de BI conectado a Gold | 🟡 En progreso | Business Intelligence (depende del Issue 7) |
+| [13](https://github.com/dodamivid/MoneyWise-DataLake/issues/13) | Dashboard de BI conectado a Gold | 🟢 Completo | Business Intelligence (depende del Issue 7) |
 
 > **Reglas de Gold:** solo movimientos activos (`eliminado_en` vacío); cada movimiento cuenta una vez, sin repartir los recurrentes por frecuencia; el mes sale de `fecha_inicio`; sin datos personales (solo `usuario_id`). Son las mismas reglas que usan los `sp_dashboard_*` de la app.
 
@@ -144,6 +143,7 @@ Leyenda: ⚪ Pendiente · 🟡 En progreso · 🟢 Completo
 - **Python 3.10+** en tu equipo, para el verificador de eventos (`kafka/scripts/verify_events.py`) y los tests de calidad. Spark corre dentro de Docker: no necesitas Java.
 - Una base **MySQL en Railway** con el binlog activado y un usuario para Debezium (ver abajo).
 - *(Opcional)* una cuenta de **GCP con facturación** para publicar Gold en Cloud Storage y cargarlo en BigQuery. Sin ella, el pipeline corre igual y las tareas `subir_gold` y `cargar_bigquery` se omiten.
+- *(Opcional)* **Power BI Desktop** (solo Windows) para abrir el dashboard de `dashboard/`.
 
 ### Preparación (una sola vez)
 
@@ -202,6 +202,9 @@ pytest                      # contrato, nulos, llaves, coherencia y recálculo d
 pytest -m fuente            # además, cuadra el lago contra la base real en Railway (solo lectura)
 pytest -m bigquery          # además, cuadra las tablas de BigQuery contra el lago (solo lectura)
 pytest --datos=sintetico    # sin datos reales: lo mismo que corre el CI
+
+# 9. Dashboard (Issue 13): abre dashboard/moneywise-gold.pbix con Power BI Desktop.
+#    Para conectarlo a tu propio BigQuery o reconstruirlo, sigue dashboard/README.md
 ```
 
 > **Apagar y prender:** usa `docker compose down` (sin `-v`) y `docker compose up -d`. Zookeeper, Kafka y MySQL tienen volúmenes, así que sus datos sobreviven. `down -v` lo borra todo. Si recreas el volumen de Kafka, vacía `data/bronze` y `data/checkpoints` y reconstruye Bronze, Silver y Gold: los offsets de Bronze pertenecen al topic anterior.
@@ -217,3 +220,5 @@ pytest --datos=sintetico    # sin datos reales: lo mismo que corre el CI
 > **Cloud Storage:** al final del DAG, `subir_gold` publica las 4 tablas de Gold en `gs://<tu-bucket>/gold/<tabla>/data.parquet` con nombre fijo (cada corrida sobrescribe la anterior), verifica tamaño y MD5 y publica `gold/_manifest.json`. Se autentica con una service account: la llave JSON vive en `gcp/credentials/` (ignorada por git) y solo el scheduler la tiene montada. Si `GCS_BUCKET` está vacío la tarea se omite y el resto del pipeline sigue igual. Para entrar al free tier el bucket debe estar en `us-central1`, `us-east1` o `us-west1`.
 
 > **BigQuery:** tras subir Gold, `cargar_bigquery` lo carga a tablas nativas del dataset `BQ_DATASET` (en la misma región que el bucket) con un trabajo de carga por tabla y `WRITE_TRUNCATE`: cada tabla se reemplaza completa en una sola actualización atómica. Los decimales se fuerzan a `NUMERIC` (si alguno no cupiera, la carga falla en lugar de cambiar de tipo) y se verifica que las columnas y el número de filas sean los esperados. La cuenta de servicio necesita *BigQuery Job User* en el proyecto y *BigQuery Data Editor* sobre el dataset. Si `BQ_DATASET` está vacío, la tarea se omite. Cargar datos desde Cloud Storage es gratis; las consultas del dashboard caben de sobra en el free tier.
+
+> **Dashboard:** `dashboard/moneywise-gold.pbix` importa las 4 tablas de BigQuery (modo Importar) y las relaciona con dos dimensiones, `dim_usuario` y `dim_mes`, para que un selector de usuario o de mes filtre todas a la vez. Tiene 4 páginas: Balance, Gasto por categoría, Variación mensual y Anomalías. Los datos se copian al archivo: el DAG actualiza BigQuery todos los días, pero el dashboard se refresca al pulsar **Actualizar** en Power BI Desktop. Limitación conocida: el filtro de destino no filtra el gráfico de tipo de pago, ni al revés, porque son dos tablas de Gold con granularidad distinta (ver [dashboard/README.md](dashboard/README.md#limitaciones)).

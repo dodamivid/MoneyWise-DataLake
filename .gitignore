@@ -47,3 +47,4 @@ Thumbs.db
 # Dumps con datos de Railway: nunca al repo
 dumps/
 data/benchmark/
+data/latencia/

@@ -115,6 +115,35 @@ Dos cosas a tener en cuenta. La comparación con Railway es contra la base **en 
 
 **Reintentos y alertas.** Cada tarea se reintenta 2 veces con 2 minutos de espera (`MW_REINTENTO_MINUTOS`), con un máximo de 30 minutos por intento. Cada reintento y cada falla se anota en `airflow/logs/alertas.log` y queda visible en la interfaz.
 
+### Latencia: cuánto tarda un cambio en llegar a BigQuery
+
+Un cambio recorre dos tramos con ritmos distintos: la **captura** es continua y la **publicación** es por lotes, cuando corre el DAG.
+
+| Tramo | Qué se midió | Resultado |
+|---|---|---|
+| Captura (MySQL, Debezium, Kafka) | 15 operaciones reales hechas por la API (6 altas, 3 ediciones y 6 eliminaciones de egresos): tiempo desde que se envió la petición hasta que Debezium emitió el evento | mediana **0.55 s**, máximo **2.4 s** |
+| Publicación (DAG completo, 11 tareas, hasta BigQuery) | Una corrida manual | **3 min 48 s** |
+| Espera por el horario | Cálculo, no medición | Con la corrida de las 3:00, un cambio puede esperar hasta cerca de **24 h**; con disparo manual, unos 4 min |
+
+**Cómo se midió.** Con un usuario de prueba, `scripts/generar_eventos_cdc.py` hace las 15 operaciones **por la API** (el usuario de Debezium en Railway es de solo lectura, así que no se escribe nada directo en la base) y guarda la hora de cada una. Después de correr Bronze, `scripts/medir_latencia.py` busca esos eventos, uno por operación, y calcula el tiempo hasta que Debezium los emitió (`ts_ms`). Como el reloj de Debezium es el del contenedor de Docker y puede no coincidir con el de la PC, el script mide ese desfase (+4.4 s en la prueba) y lo resta.
+
+```
+set MWI_API_KEY=<valor de x-api-key, solo en esa ventana: nunca en un archivo>
+python scripts\generar_eventos_cdc.py
+docker exec mw-spark /usr/local/spark/bin/spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0 --conf spark.jars.ivy=/tmp/ivy /home/jovyan/work/spark/jobs/bronze/bronze_job.py
+python scripts\medir_latencia.py
+```
+
+**Qué significa.** La captura es casi inmediata; el análisis llega por lotes. El lago no sustituye a consultar MySQL directamente cuando se quiere ver un dato al instante: aporta lo que MySQL no daba (histórico, variación mensual, detección de anomalías y un dashboard) con el retraso de un lote.
+
+**Límites de la medición.**
+- Son **15 operaciones en una sola tarde**: con tan pocos datos, el p95 es prácticamente el máximo. Es una prueba, no una garantía.
+- La corrección por desfase de reloj tiene un margen de error de unos cientos de milisegundos: los mínimos salen levemente negativos (-0.2 s), lo que no puede ocurrir en la realidad. Por eso se citan décimas de segundo, no milisegundos.
+- La medida de captura incluye lo que tarda la API en procesar la petición.
+- El tiempo del DAG es de **una sola corrida**, con pocos datos nuevos.
+- **No se midió** el último tramo (de BigQuery al dashboard: en modo Importar se actualiza a mano) ni el comportamiento con carga alta.
+- El usuario de prueba (`latencia.prueba@moneywise.test`) queda en la base: la API no permite borrar usuarios. Sus egresos se eliminan al final de cada corrida del script.
+
 ## 4. Cloud Storage, BigQuery y el dashboard
 
 `subir_gold` (script `gcp/subir_gold.py`) deja esto en el bucket:
@@ -237,6 +266,7 @@ Las variables `ANOM_*` se leen dentro del contenedor de Spark, así que se pasan
 ## 9. Limitaciones conocidas y siguientes pasos
 
 - **Los datos de prueba son aleatorios.** Las anomalías detectadas son, sobre todo, ruido estadístico; el nivel "extremo" se validó con casos construidos a mano y con una inserción real de prueba, no con datos reales.
+- **El análisis llega por lotes.** La captura de cambios es casi inmediata, pero BigQuery y el dashboard se actualizan cuando corre el DAG (todos los días a las 3:00, o con un disparo manual). Con el horario actual un dato puede tardar hasta cerca de un día; ver [Latencia](#latencia-cuánto-tarda-un-cambio-en-llegar-a-bigquery).
 - **Retención.** Kafka conserva los mensajes unos 7 días por defecto y el binlog de Railway 30. Si Bronze no corre durante más que la retención de Kafka, los eventos no leídos se pierden del topic.
 - **Alertas locales.** Los avisos quedan en un archivo y en la interfaz. El correo requiere un servidor SMTP y otro secreto, y no está implementado.
 - **La llave JSON no expira.** Se trata como una contraseña: mínimo privilegio, solo en el scheduler, y se elimina desde la consola si se filtra.

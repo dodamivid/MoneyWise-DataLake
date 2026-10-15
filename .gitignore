@@ -46,3 +46,4 @@ Thumbs.db
 *.log
 # Dumps con datos de Railway: nunca al repo
 dumps/
+data/benchmark/
